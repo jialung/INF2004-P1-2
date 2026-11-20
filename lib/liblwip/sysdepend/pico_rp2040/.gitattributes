@@ -1,0 +1,3 @@
+# BARR-C 3.6a: LF line endings for the team's telnet_utk files.
+telnet_utk.c text eol=lf
+telnet_utk.h text eol=lf

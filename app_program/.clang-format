@@ -1,0 +1,65 @@
+# Formatting for the team's code, following BARR-C:2018 (Embedded C Coding
+# Standard, Barr Group).  Only app_program/ uses this file; the vendor
+# micro T-Kernel sources keep their own style (BARR-C: leave legacy code).
+#
+# Run from the project root:
+#   clang-format -i app_program/*.c app_program/*.h app_program/*/*.c ...
+#
+# Rule numbers below are BARR-C:2018 sections.
+Language: Cpp
+BasedOnStyle: LLVM
+
+# 1.2a  80-column lines.
+ColumnLimit: 80
+ReflowComments: Always
+
+# 1.3a  Braces around every if / else / for / while / do body.
+InsertBraces: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: None
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
+# 1.3b  Each brace on its own line.
+BreakBeforeBraces: Allman
+
+# 3.1   Spaces.  3.1j: one space between the name and "(" in a function
+#       definition only; none in calls or prototypes.  3.1e: "char * p".
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+  AfterControlStatements: true
+  AfterFunctionDefinitionName: true
+  AfterFunctionDeclarationName: false
+PointerAlignment: Middle
+SpaceAfterCStyleCast: true
+SpacesInParens: Never
+
+# 3.2   Alignment of declarations, assignments and macros.
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveMacros: Consecutive
+AlignTrailingComments: true
+AlignEscapedNewlines: Left
+# 3.2d  "#" always in column 1.
+IndentPPDirectives: None
+
+# 3.4   4-space indents; case labels aligned, case bodies indented once.
+IndentWidth: 4
+ContinuationIndentWidth: 4
+IndentCaseLabels: true
+
+# 3.5a  No tab characters.  3.6a  LF line endings.
+UseTab: Never
+TabWidth: 4
+LineEnding: LF
+InsertNewlineAtEOF: true
+
+# Include order matters here (app.h must come before any SDK header).
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+MaxEmptyLinesToKeep: 2
+KeepEmptyLines:
+  AtStartOfBlock: false

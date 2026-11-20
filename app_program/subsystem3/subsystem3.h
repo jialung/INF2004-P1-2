@@ -1,12 +1,13 @@
 /*
- *	subsystem3.h
- *	Subsystem 3 -- IMU: heading, tilt, humps, impact.
- *	Owner: Jian Yi (Physics Watchdog).  Public interface only.  Plan section 8.
+ *      subsystem3.h
+ *      Subsystem 3 -- IMU: heading, tilt, humps, impact.
+ *      Owner: Jian Yi (Physics Watchdog).  Public interface only.  Plan
+ * section 8.
  *
- *	Outputs  nav_state IMU half (heading, roll, pitch, terrain),
- *	         EV_HUMP_CLIMB, EV_HUMP_LEVEL, EV_CALIB_DONE (CAL_WHO_IMU),
- *	         IMU_SENSOR, IMPACT and PICKUP bits
- *	Inputs   I2C1 (sole owner), nav_state speed + acceleration, flg_calib
+ *      Outputs  nav_state IMU half (heading, roll, pitch, terrain),
+ *               EV_HUMP_CLIMB, EV_HUMP_LEVEL, EV_CALIB_DONE (CAL_WHO_IMU),
+ *               IMU_SENSOR, IMPACT and PICKUP bits
+ *      Inputs   I2C1 (sole owner), nav_state speed + acceleration, flg_calib
  */
 
 #ifndef SUBSYSTEM3_H
@@ -17,11 +18,12 @@
 IMPORT ID tid_imu;
 
 /* Terrain / hump statechart state (3 bits, JY-1.11; Design Review 6.3) */
-typedef enum {
-	TER_LEVEL = 0,
-	TER_CLIMBING,		/* |tilt| > enter threshold for N samples */
-	TER_SENSOR_FAULT,
-	TER_STATE_COUNT
+typedef enum
+{
+    TER_LEVEL = 0,
+    TER_CLIMBING, /* |tilt| > enter threshold for N samples */
+    TER_SENSOR_FAULT,
+    TER_STATE_COUNT
 } TERRAIN_STATE;
 
 /* Thresholds (chain 4.4), in 0.25 deg units, on the SMOOTHED roll.
@@ -30,8 +32,9 @@ typedef enum {
    humps of 13-20 mm.  So: smooth first, then a higher, longer test.  A
    real one-wheel hump at ~120 mm/s takes several hundred ms, so 120 ms
    is still early enough to slow down. */
-#define HUMP_FILTER_SHIFT	2	/* roll_f += (roll - roll_f) / 4 per 20 ms
-					   sample: time constant ~80 ms (log only) */
+/* roll_f += (roll - roll_f) / 4 per 20 ms
+   sample: time constant ~80 ms (log only) */
+#define HUMP_FILTER_SHIFT 2
 
 /* ---- Hump height (5 Nov): one wheel, always the RIGHT one ------------
  * The two wheel contacts stay TRACK_WIDTH_MM (W) apart, so with the right
@@ -75,7 +78,7 @@ typedef enum {
    under the right wheel reads POSITIVE (checked), and the course only
    has right-wheel humps; 0 let the wheel dropping off the hump (swings
    down to -15 mm) count as a "left" hump. */
-#define HUMP_RIGHT_ONLY		1
+#define HUMP_RIGHT_ONLY 1
 /* Lever arm L in h = L x sin(tilt), mm: the track width W (113), the car
    pivoting on the left wheel.  5 Nov this was set to 61 from a 10 mm
    hump reading 18.6 mm, but that reading came from the wrong (pitch)
@@ -89,9 +92,9 @@ typedef enum {
    2 s means 13.6..15.2, ~14.4 mm; same spot off the hump ~2.7 mm.  So
    10 mm reads 11.7 mm: 113 x 10 / 11.7 = 97.  (The wheel sits on the
    hump's edge / the tyre squashes: the lean is a bit more than 10/113.) */
-#define HUMP_LEVER_MM		97
-#define HUMP_STEER_COMP		1	/* subtract v x omega from a_l */
-#define HUMP_MED_N		5	/* median window, samples (100 ms) */
+#define HUMP_LEVER_MM   97
+#define HUMP_STEER_COMP 1 /* subtract v x omega from a_l */
+#define HUMP_MED_N      5 /* median window, samples (100 ms) */
 /* Moving-average window for the height (step 6 above).  It must be
    SHORTER than the time the raised wheel spends on the flat top: a
    window that straddles a ramp reads low.  10 samples = 200 ms, and by
@@ -107,10 +110,11 @@ typedef enum {
    10 is the middle: raise it if the track is rough, lower it if the log
    reports "TOO SHORT" on a real hump.  That marker means no window ever
    sat on the flat top, and the single highest sample was used instead. */
-#define HUMP_AVG_N		10	/* moving-average window, samples (200 ms) */
-#define HUMP_REF_SHIFT		5	/* s_ref follows the floor, ~640 ms */
-#define HUMP_REF_HOLD_N		50	/* frozen at most this long (1 s), then
-					   it is a slope, not a hump */
+#define HUMP_AVG_N     10 /* moving-average window, samples (200 ms) */
+#define HUMP_REF_SHIFT 5  /* s_ref follows the floor, ~640 ms */
+/* frozen at most this long (1 s), then
+   it is a slope, not a hump */
+#define HUMP_REF_HOLD_N 50
 /* Enter: h above HUMP_ENTER_X10 for HUMP_ENTER_N samples AND over
    HUMP_ENTER_TRAVEL_MM of travel.  5 Nov: bumps under 5 mm on the flat
    track were taken as humps (they read ~2x too high, see HUMP_LEVER_MM,
@@ -119,20 +123,22 @@ typedef enum {
    ridges, since the hump's ramp + flat top is far longer. */
 /* 6 Nov: 7.0 -> 5.5 mm.  On the flat part of the run the tilt stayed
    within -2.9 .. +4.1 mm; the hump read -6.7 / -7.9 mm, too close to 7. */
-#define HUMP_ENTER_X10		55	/* 5.5 mm */
-#define HUMP_ENTER_N		4	/* 80 ms ... */
-#define HUMP_ENTER_TRAVEL_MM	10	/* ... and 10 mm of travel above it
-					   (5 Nov: 15 missed the hump) */
+#define HUMP_ENTER_X10 55 /* 5.5 mm */
+#define HUMP_ENTER_N   4  /* 80 ms ... */
+/* ... and 10 mm of travel above it
+   (5 Nov: 15 missed the hump) */
+#define HUMP_ENTER_TRAVEL_MM 10
 /* 1: "[imu] hump watch" once a second while following the line: the
    right wheel height now, min / max over the last second, against the
    trigger.  Drive over the hump and read it to tune the numbers above. */
-#define HUMP_DEBUG		1
-#define HUMP_LEVEL_X10		20	/* 2.0 mm either side of the level */
-#define HUMP_EXIT_N		5	/* 100 ms at level */
-#define HUMP_MAX_MM		500	/* climbing this far without reaching level:
-					   register the hump anyway, so the car
-					   does not stay slow (HumpTraverse) */
-#define IMU_FAIL_LIMIT		3	/* failed reads -> IMU_SENSOR (JY-1.5) */
+#define HUMP_DEBUG     1
+#define HUMP_LEVEL_X10 20 /* 2.0 mm either side of the level */
+#define HUMP_EXIT_N    5  /* 100 ms at level */
+/* climbing this far without reaching level:
+   register the hump anyway, so the car
+   does not stay slow (HumpTraverse) */
+#define HUMP_MAX_MM    500
+#define IMU_FAIL_LIMIT 3 /* failed reads -> IMU_SENSOR (JY-1.5) */
 
 /* Sensor axes -> car frame.  axis: 0 = sensor X, 1 = Y, 2 = Z; sign +1/-1.
    6 Nov, mount as built (team): sensor Y points BACKWARDS, sensor X
@@ -150,19 +156,19 @@ typedef enum {
    near 0; lift the LEFT side -> roll +; lift the NOSE -> pitch +; spacer
    under the RIGHT wheel -> "right wheel X mm" +; turn the car RIGHT
    (clockwise from above) -> heading goes up.  Fix signs here.          */
-#define IMU_AXIS_FWD		1
-#define IMU_SIGN_FWD		(-1)
-#define IMU_AXIS_LEFT		0
-#define IMU_SIGN_LEFT		(+1)
-#define IMU_AXIS_UP		2
-#define IMU_SIGN_UP		(+1)
+#define IMU_AXIS_FWD  1
+#define IMU_SIGN_FWD  (-1)
+#define IMU_AXIS_LEFT 0
+#define IMU_SIGN_LEFT (+1)
+#define IMU_AXIS_UP   2
+#define IMU_SIGN_UP   (+1)
 /* Extra sign for the ACCELEROMETER left axis only (was -1, see above) */
-#define IMU_ACC_SIGN_LEFT	(+1)
+#define IMU_ACC_SIGN_LEFT (+1)
 
 /* Impact (JY-1.12): horizontal acceleration, mg, this many samples */
-#define IMPACT_MG		2000	/* PLACEHOLDER: tune on the bench */
-#define IMPACT_N		2
-#define IMPACT_HOLDOFF_MS	300	/* after a hump: landing is not a hit */
+#define IMPACT_MG         2000 /* PLACEHOLDER: tune on the bench */
+#define IMPACT_N          2
+#define IMPACT_HOLDOFF_MS 300 /* after a hump: landing is not a hit */
 
 /* Pickup: stop the motors when the car is lifted while running (PICKUP
    fault).  Checked only in a running state, never during calibration.
@@ -187,33 +193,37 @@ typedef enum {
       set this well above the highest value seen there.  0 = off.
    Holding the car still and level after the lift reads 1 g, the same as
    the floor: only the lift itself is visible to the IMU. */
-#define PICKUP_TILT_Q		100	/* 25 deg */
-#define PICKUP_TILT_N		15	/* 300 ms (was 5 = 100 ms) */
-#define PICKUP_TILT_G_LO	850	/* mg: |a| this close to 1 g = the angle is a tilt */
-#define PICKUP_TILT_G_HI	1150
-#define PICKUP_LIFT_MG		1400	/* PLACEHOLDER: tune on the track */
-#define PICKUP_LIFT_N		3	/* 60 ms */
+#define PICKUP_TILT_Q 100 /* 25 deg */
+#define PICKUP_TILT_N 15  /* 300 ms (was 5 = 100 ms) */
+/* mg: |a| this close to 1 g = the angle is a tilt */
+#define PICKUP_TILT_G_LO 850
+#define PICKUP_TILT_G_HI 1150
+#define PICKUP_LIFT_MG   1400 /* PLACEHOLDER: tune on the track */
+#define PICKUP_LIFT_N    3    /* 60 ms */
 
 /* Calibration (JY-1.13) */
-#define IMU_CAL_LEVEL_MS	1000	/* still and flat */
-#define IMU_CAL_MS		15000	/* total, incl. the full turn */
-#define IMU_CAL_MAG_SPAN	200	/* counts on f and l, else keep old */
+#define IMU_CAL_LEVEL_MS 1000  /* still and flat */
+#define IMU_CAL_MS       15000 /* total, incl. the full turn */
+#define IMU_CAL_MAG_SPAN 200   /* counts on f and l, else keep old */
 
 /* 0 (default): a missing / wrong IMU at boot is logged and the car runs
    without it (no compass check, no humps).  1: it is an INIT_FAIL. */
-#define IMU_REQUIRED		0
+#define IMU_REQUIRED 0
 
-typedef struct {
-	H	roll0_q, pitch0_q;	/* level offsets, 0.25 deg */
-	H	mag_off_f, mag_off_l, mag_off_u;	/* hard iron, car frame */
-	UB	mag_ok;			/* compass calibrated */
-	H	lat0_q14;		/* level: a_l / |a| at rest, Q14 (hump) */
+typedef struct
+{
+    H  roll0_q, pitch0_q;               /* level offsets, 0.25 deg */
+    H  mag_off_f, mag_off_l, mag_off_u; /* hard iron, car frame */
+    UB mag_ok;                          /* compass calibrated */
+    H  lat0_q14; /* level: a_l / |a| at rest, Q14 (hump) */
 } IMU_CAL;
-IMPORT volatile IMU_CAL	imu_cal;
-IMPORT volatile UB	imu_peak_mm;	/* highest hump (FR8) */
+IMPORT volatile IMU_CAL imu_cal;
+IMPORT volatile UB      imu_peak_mm; /* highest hump (FR8) */
 
 /* Private to subsystem 3 */
-IMPORT void imu_task(INT stacd, void *exinf);
+IMPORT void imu_task(INT stacd, void * exinf);
 IMPORT INT  imu_driver_status;
 
 #endif /* SUBSYSTEM3_H */
+
+/*** end of file ***/
