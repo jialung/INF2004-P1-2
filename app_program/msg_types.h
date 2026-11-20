@@ -97,22 +97,12 @@ typedef enum {
 #define REMOTE_STOP		2U
 #define REMOTE_MODE_SHORT	3U	/* MODE short press: clear Fault / leave Calibrate */
 #define REMOTE_MODE_LONG	4U	/* MODE held 2 s: Calibrate (from Idle only) */
-#define REMOTE_AVOID_LEFT	5U	/* bypass obstacles on the left (default) */	/* 11 Nov: obstacle bypass */
-#define REMOTE_AVOID_RIGHT	6U	/* bypass obstacles on the right */	/* 11 Nov: obstacle bypass */
+/* 5, 6 (avoid left / right), 9 (servo trim), 11 (servo ends) and 12 (raw
+   scan) were removed 20 Nov: the bypass side comes from the width sweep
+   and the servo constants are fixed in drv_servo.h.  Not reused. */
 #define REMOTE_BYPASS_DEPTH	7U	/* obstacle depth for the bypass, mm in word b */	/* 12 Nov: bypass depth from the PC */
 #define REMOTE_WIDTH_CAL	8U	/* width calibration (Idle), known box width mm in word b */	/* 12 Nov: width sweep */
-#define REMOTE_SERVO_TRIM	9U	/* servo straight-ahead trim (Idle), signed us in word b */	/* 13 Nov */
 #define REMOTE_EDGE_SWEEP	10U	/* width sweep in Idle, measure only, print both edges */	/* 13 Nov */
-#define REMOTE_SERVO_END	11U	/* TEMPORARY: servo end calibration (Idle), SEND_B in word b */	/* 19 Nov */
-#define REMOTE_RAW_SCAN		12U	/* TEMPORARY: raw scan in Idle, readings to the log only */	/* 20 Nov */
-/* REMOTE_SERVO_END word b: the end's adjustment, signed us in bits 0..15,
-   the side in bits 16..17 (SEND_AHEAD: just go straight ahead). */
-#define SEND_AHEAD		0U
-#define SEND_LEFT		1U
-#define SEND_RIGHT		2U
-#define SEND_B(side, us)	(BF_PUT((UW)(us), 0, 16) | BF_PUT((UW)(side), 16, 2))
-#define SEND_US(b)		BF_GETS(b, 0, 16)
-#define SEND_SIDE(b)		BF_GET(b, 16, 2)
 /* REMOTE_WIDTH_CAL word b (13 Nov): the box's left / right edge from the
    car's centre line, mm, signed 16 bits each (+ = out on that side).
    0 = "wcal clear" (a real run never has both edges at 0). */
@@ -265,7 +255,6 @@ typedef enum {
 	SCAN_PASS_RIGHT,	/* servo to the right side */
 	SCAN_EMERG_ONLY,	/* servo ahead, only D_EMERG may stop (bypass legs) */
 	SCAN_SIDE_PROBE,	/* car stopped: 7 looks at 0..30 deg to one side -> EV_OBST_SIDE */	/* 11 Nov: obstacle bypass */
-	SCAN_RAW,		/* TEMPORARY: Idle, every 1 deg across the servo range, raw readings to the log */	/* 20 Nov: "rscan" */
 	SCAN_MODE_COUNT		/* <= 8: the mode is 3 bits in SCAN_REQ */
 } SCAN_MODE;
 

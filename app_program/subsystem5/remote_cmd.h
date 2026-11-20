@@ -8,12 +8,14 @@
  *	  "start", "stop"   like the START button
  *	  "mode"            like a short MODE press (clear Fault, leave Calibrate)
  *	  "calibrate"       like holding MODE 2 s (Calibrate, from Idle only)
- *	  "avoid left", "avoid right"   choose the obstacle bypass side (any state; beeps)
- *	                    exactly one space between the two words
  *	  "depth <mm>"      obstacle depth the bypass assumes, 10..300, "mm"
  *	                    after the number allowed (any state; beeps)
- *	  "rscan"           TEMPORARY (20 Nov): raw ultrasonic scan across the
- *	                    servo range, readings to the log (Idle only)
+ *	  "wcal <l> <r>"    width calibration run, each box edge from the
+ *	                    centre line in mm (Idle only)
+ *	  "wcal clear"      forget the calibration runs (any state)
+ *	  "esweep"          width sweep, measure only (Idle only)
+ *	The bypass side is not a command: the car goes round the side with
+ *	more room, from the width sweep (20 Nov).
  *	The PC must publish it NOT retained: a retained "start" would start
  *	the car again every time it reconnects to the broker.
  */

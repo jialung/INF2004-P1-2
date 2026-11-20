@@ -19,6 +19,7 @@
 #include "../../app_program/subsystem3/imu_math.h"
 #include "../../app_program/subsystem5/bypass_geom.h"
 #include "../../app_program/subsystem5/obst_width.h"
+#include "../../app_program/subsystem5/subsystem5.h"	/* BYPASS_SIDE_DEFAULT */
 
 static int pass, fail;
 #define T_CHECK(id, cond) do { if (cond) pass++; else { fail++; \
@@ -131,6 +132,9 @@ static void test_faults(void)
 	T_CHECK("clear keeps others", fault_peek() == FAULT_IMPACT);
 	T_CHECK("stop mask", (FAULT_STOP_MASK & FAULT_OBST_STOP) && !(FAULT_TRIP_MASK & FAULT_OBST_STOP));
 	T_CHECK("wifi is status only", !(FAULT_STOP_MASK & FAULT_WIFI_DOWN));
+	T_CHECK("pickup trips and stops", (FAULT_TRIP_MASK & FAULT_PICKUP) &&
+		(FAULT_STOP_MASK & FAULT_PICKUP) && (FAULT_USER_CLEAR_MASK & FAULT_PICKUP));
+	T_CHECK("pickup name", strcmp(fault_name(FAULT_PICKUP), "PICKUP") == 0);
 	fault_clear(0xFFFF);
 	T_CHECK("all clear", fault_peek() == 0);
 	drain(mbf_sup_event);
@@ -577,8 +581,9 @@ static void test_bypass_geom(void)
 	T_CHECK("SCAN side probe", SCAN_MODE_OF(w) == SCAN_SIDE_PROBE && SCAN_SEQ(w) == 3 &&
 				   SCAN_PARAM(w) == SIDE_PROBE_LEFT);
 	T_CHECK("SCAN_SIDE_PROBE = 6", SCAN_SIDE_PROBE == 6 && SCAN_MODE_COUNT <= 8);
-	w = SCAN_PACK(SCAN_RAW, 15, 0);		/* TEMPORARY (20 Nov): the last 3-bit mode */
-	T_CHECK("SCAN raw", SCAN_RAW == 7 && SCAN_MODE_OF(w) == SCAN_RAW && SCAN_SEQ(w) == 15);
+	w = SCAN_PACK(SCAN_SIDE_PROBE, 15, SIDE_PROBE_RIGHT);	/* the last mode, the largest seq */
+	T_CHECK("SCAN last mode", SCAN_MODE_COUNT == 7 && SCAN_MODE_OF(w) == SCAN_SIDE_PROBE &&
+				  SCAN_SEQ(w) == 15 && SCAN_PARAM(w) == SIDE_PROBE_RIGHT);
 	for (i = 0; i < SIDE_LOOKS; i++) {
 		if (i < 5) wa |= SIDE_PUT(i, vals[i]); else wb |= SIDE_PUT(i, vals[i]);
 	}
@@ -606,7 +611,7 @@ static void test_obst_width(void)
 	static const OW_CAL def = { OW_SL_E4, OW_KL_E4, OW_SR_E4, OW_KR_E4 };
 	OW_POINT syn[4];
 	OW_CAL c;
-	int32_t s, k, i, F;
+	int32_t s, k, i, F, l, r;
 	UW w;
 
 	/* tan at 0.1 deg: tan 20 = 0.36397, 30 = 0.57735, 45 = 1 */
@@ -676,13 +681,50 @@ static void test_obst_width(void)
 	syn[3].el_half = 30;
 	T_CHECK("OW fit rejects K <= 0", ow_fit_side(syn, 4, OW_SIDE_LEFT, &s, &k) == -1);
 
+	/* bypass side (20 Nov): round the side with more room.  Plain
+	   geometry, face 350 (F = 362): edge = 362 x tan(boundary), so
+	   20 deg -> 132 mm, 15 deg -> 97, 14 deg -> 90, 11 deg -> 70,
+	   10 deg -> 64 */
+	T_CHECK("OW side: reaches left -> right",
+		ow_bypass_side(350, 40, 20, 0, 0, &geo, &l, &r) == OW_GO_RIGHT &&
+		i32abs(l - 132) <= 1 && i32abs(r - 64) <= 1);
+	T_CHECK("OW side: reaches right -> left",
+		ow_bypass_side(350, 20, 40, 0, 0, &geo, &l, &r) == OW_GO_LEFT &&
+		i32abs(l - 64) <= 1 && i32abs(r - 132) <= 1);
+	T_CHECK("OW side: 27 mm off -> right",
+		ow_bypass_side(350, 30, 22, 0, 0, &geo, NULL, NULL) == OW_GO_RIGHT);
+	T_CHECK("OW side: 7 mm off = centred",
+		ow_bypass_side(350, 30, 28, 0, 0, &geo, NULL, NULL) == OW_GO_EITHER &&
+		ow_bypass_side(350, 28, 30, 0, 0, &geo, NULL, NULL) == OW_GO_EITHER);
+	T_CHECK("OW side: margin", OW_SIDE_MARGIN_MM == 20);
+	/* an edge past the line (box mostly on the other side) */
+	T_CHECK("OW side: box right of the line",
+		ow_bypass_side(394, 40, 70, 0, 0, &def, &l, NULL) == OW_GO_LEFT && l < 0);
+	/* the 20 Nov runs, a 120 mm box centred: no preference */
+	T_CHECK("OW side: 20 Nov centred box",
+		ow_bypass_side(394, 61, 59, 0, 0, &def, &l, &r) == OW_GO_EITHER &&
+		i32abs(l - 60) <= 1 && i32abs(r - 60) <= 1);
+	/* an edge out of view: the box reaches past the sweep on that side,
+	   whatever the numbers say */
+	T_CHECK("OW side: left out of view -> right",
+		ow_bypass_side(350, 70, 69, 1, 0, &geo, NULL, NULL) == OW_GO_RIGHT &&
+		ow_bypass_side(350, 70, 20, 1, 0, &geo, NULL, NULL) == OW_GO_RIGHT);
+	T_CHECK("OW side: right out of view -> left",
+		ow_bypass_side(350, 69, 70, 0, 1, &geo, NULL, NULL) == OW_GO_LEFT);
+	T_CHECK("OW side: both out of view",
+		ow_bypass_side(350, 70, 70, 1, 1, &geo, NULL, NULL) == OW_GO_EITHER);
+	T_CHECK("OW side: no face",
+		ow_bypass_side(0, 40, 20, 0, 0, &geo, &l, &r) == OW_GO_EITHER && l == 0 && r == 0);
+	T_CHECK("OW side: default is a side",
+		BYPASS_SIDE_DEFAULT == OW_GO_LEFT || BYPASS_SIDE_DEFAULT == OW_GO_RIGHT);
+
 	/* "wcal <left> <right>" packing, signed 16 bits each */
 	w = WCAL_B(-120, 250);
 	T_CHECK("WCAL round trip", WCAL_L(w) == -120 && WCAL_R(w) == 250);
 	w = WCAL_B(75, 75);
 	T_CHECK("WCAL plain", WCAL_L(w) == 75 && WCAL_R(w) == 75 && w != 0U);
-	T_CHECK("REMOTE codes", REMOTE_SERVO_TRIM == 9U && REMOTE_EDGE_SWEEP == 10U &&
-				REMOTE_SERVO_END == 11U && REMOTE_RAW_SCAN == 12U);
+	T_CHECK("REMOTE codes", REMOTE_BYPASS_DEPTH == 7U && REMOTE_WIDTH_CAL == 8U &&
+				REMOTE_EDGE_SWEEP == 10U);
 	/* the message word */
 	w = WM_PACK(4095, 127, 59, WM_F_OOV_L | WM_F_NONE);
 	T_CHECK("WM round trip", WM_FACE(w) == 4095 && WM_EDGE_L(w) == 127 &&

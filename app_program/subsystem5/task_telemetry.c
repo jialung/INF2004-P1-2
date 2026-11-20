@@ -130,7 +130,7 @@ EXPORT uint32_t telem_snapshot(char *out, uint32_t size)
 		"\"x_mm\":%d,\"y_mm\":%d,\"heading_deg\":%d,\"roll_q\":%d,\"pitch_q\":%d,"
 		"\"humps\":%d,\"hump_peak_mm\":%d,\"barcodes\":%d,\"misreads\":%d,"
 		"\"last_letter\":\"%c\",\"pending\":\"%c\",\"obstacle_width_mm\":%d,"
-		"\"avoid\":\"%s\",\"depth_mm\":%d,\"map\":\"%s\"}",
+		"\"bypass_side\":\"%s\",\"depth_mm\":%d,\"map\":\"%s\"}",
 		state_name[s < SYS_STATE_COUNT ? s : 0], (INT)fault_peek(),
 		(INT)ns.m.odo_mm, (INT)ns.m.v_mm_s, (INT)ns.m.x_mm, (INT)ns.m.y_mm,
 		(INT)ns.i.heading_deg, (INT)ns.i.roll_q, (INT)ns.i.pitch_q,
@@ -139,7 +139,7 @@ EXPORT uint32_t telem_snapshot(char *out, uint32_t size)
 		(bc_stats.last_letter < 26U) ? (INT)('A' + bc_stats.last_letter) : '-',
 		(pend >= 0) ? (INT)('A' + pend) : '-',
 		(INT)sup_obstacle_width_mm(),
-		(sup_avoid_side() > 0) ? "left" : "right", (INT)sup_bypass_depth(), mtxt);
+		(sup_bypass_side() > 0) ? "left" : "right", (INT)sup_bypass_depth(), mtxt);
 }
 
 LOCAL SPEED_LEVEL speed_of(SYS_STATE s)

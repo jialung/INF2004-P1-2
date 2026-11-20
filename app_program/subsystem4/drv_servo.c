@@ -7,11 +7,9 @@
 #include "../hal.h"
 #include "../hw_alloc.h"
 
-volatile int32_t servo_trim_us = SERVO_TRIM_US;
-volatile int32_t servo_end_left_us = SERVO_END_LEFT_US;
-volatile int32_t servo_end_right_us = SERVO_END_RIGHT_US;
-volatile int32_t  servo_cal_side;	/* TEMPORARY (19 Nov): "servoend" */
-volatile uint32_t servo_cal_seq;
+#if SERVO_TRIM_US > SERVO_TRIM_MAX_US || SERVO_TRIM_US < -SERVO_TRIM_MAX_US
+#error "SERVO_TRIM_US is outside +-SERVO_TRIM_MAX_US: refit the servo horn"
+#endif
 
 int32_t drv_servo_init(void)
 {
@@ -34,12 +32,11 @@ void drv_servo_set_deg(uint32_t deg)
 
 uint32_t drv_servo_set_deg_adj(uint32_t deg, int32_t adj_us)
 {
-	int32_t us, trim = servo_trim_us;
+	int32_t us;
 
 	if (deg > 180U) deg = 180U;
-	if (trim > SERVO_TRIM_MAX_US) trim = SERVO_TRIM_MAX_US;
-	if (trim < -SERVO_TRIM_MAX_US) trim = -SERVO_TRIM_MAX_US;
-	us = (int32_t)(SERVO_MIN_US + (deg * (SERVO_MAX_US - SERVO_MIN_US)) / 180U) + trim + adj_us;
+	us = (int32_t)(SERVO_MIN_US + (deg * (SERVO_MAX_US - SERVO_MIN_US)) / 180U) +
+	     SERVO_TRIM_US + adj_us;
 	if (us < (int32_t)SERVO_MIN_US) us = (int32_t)SERVO_MIN_US;
 	if (us > (int32_t)SERVO_MAX_US) us = (int32_t)SERVO_MAX_US;
 	hal_pwm_set(PIN_SERVO, (uint32_t)us);

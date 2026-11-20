@@ -5,7 +5,7 @@
  *
  *	Outputs  nav_state IMU half (heading, roll, pitch, terrain),
  *	         EV_HUMP_CLIMB, EV_HUMP_LEVEL, EV_CALIB_DONE (CAL_WHO_IMU),
- *	         IMU_SENSOR and IMPACT bits
+ *	         IMU_SENSOR, IMPACT and PICKUP bits
  *	Inputs   I2C1 (sole owner), nav_state speed + acceleration, flg_calib
  */
 
@@ -163,6 +163,36 @@ typedef enum {
 #define IMPACT_MG		2000	/* PLACEHOLDER: tune on the bench */
 #define IMPACT_N		2
 #define IMPACT_HOLDOFF_MS	300	/* after a hump: landing is not a hit */
+
+/* Pickup: stop the motors when the car is lifted while running (PICKUP
+   fault).  Checked only in a running state, never during calibration.
+   Two independent triggers:
+   1. TILT: |roll| or |pitch| (calibrated, 0.25 deg) above PICKUP_TILT_Q
+      for PICKUP_TILT_N samples in a row, each with |a| inside
+      PICKUP_TILT_G_LO..HI.  The 10 mm hump tilts ~6 deg, ~9 deg on
+      the drop-off swing (HUMP_* notes above), so 25 deg is far clear.
+      roll_q / pitch_q saturate at 127 (31.75 deg): keep the limit below.
+      Roll and pitch come from one accelerometer sample, so they are only
+      a tilt while gravity is all the sensor feels.  20 Nov: a bypass on
+      flat ground tripped at pitch -127 (a pivot's start / stop or a bump
+      read as 32 deg nose down).  A sample whose |a| is away from 1 g is
+      motion, not tilt: it restarts the count.  A car held tilted by hand
+      reads ~1 g and lasts, so the longer count still catches it.
+   2. LIFT: |a| above PICKUP_LIFT_MG (1 g + the upward jerk of the hand)
+      for PICKUP_LIFT_N samples.  This catches a lift that keeps the car
+      level, which the tilt test cannot see.  Off while on a hump
+      (TER_CLIMBING) and for IMPACT_HOLDOFF_MS after one, where climbing
+      and dropping off jolt the car vertically.  PLACEHOLDER: drive the
+      track with HUMP_DEBUG 1 and read "max |a|" in the "hump watch" line;
+      set this well above the highest value seen there.  0 = off.
+   Holding the car still and level after the lift reads 1 g, the same as
+   the floor: only the lift itself is visible to the IMU. */
+#define PICKUP_TILT_Q		100	/* 25 deg */
+#define PICKUP_TILT_N		15	/* 300 ms (was 5 = 100 ms) */
+#define PICKUP_TILT_G_LO	850	/* mg: |a| this close to 1 g = the angle is a tilt */
+#define PICKUP_TILT_G_HI	1150
+#define PICKUP_LIFT_MG		1400	/* PLACEHOLDER: tune on the track */
+#define PICKUP_LIFT_N		3	/* 60 ms */
 
 /* Calibration (JY-1.13) */
 #define IMU_CAL_LEVEL_MS	1000	/* still and flat */

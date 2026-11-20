@@ -79,10 +79,11 @@ Which image to use:
 | Letter → movement mapping over MQTT (not hard-coded); default A forward, B left, C right, D U-turn until one arrives | `subsystem5/map_parse.c/.h`, `supervisor.c`, `mqtt_utk.c` |
 | IMU driver, tilt-compensated compass, roll / pitch, hump detection and peak height, impact fault, IMU calibration | `subsystem3/drv_imu.c`, `imu_math.c/.h`, `task_imu.c` |
 | Obstacle side probe 0–30° in 5° steps, pass guard at 30°, smooth servo ramp (servo limit ±35° since 13 Nov, used only by the width sweep) | `subsystem4/task_obstacle.c` |
-| **Obstacle width** (12 Nov): two-stage stop. At 40 cm (`D_WIDTH_CM`) the car stops once, the servo sweeps (face straight ahead, then each side in 5° looks to the first miss and 1° looks to pin the boundary, about 5 s since 13 Nov: servo signal 100 Hz (`SERVO_PWM_HZ`, was 50), moves 1° per 10 ms frame and waits 150 ms before each ping), the width is computed and sent, then the car follows the line again and stops at 21 cm for the **unchanged** bypass. The window shows the finished width only. Replaces the old profile scan and the old `2 × near edge` estimate. The bypass does not use the width yet. | `subsystem4/task_obstacle.c` (`width_sweep`, `EV_OBST_AHEAD`), `subsystem4/us_echo.c` (`us_ping_mm`), `subsystem5/obst_width.c/.h`, `supervisor.c` (`width_result`), `task_telemetry.c`, `tools/mqtt/web_panel.py` |
-| Width calibration, per side (13 Nov): `wcal <left mm> <right mm>` (or `wcal <width>` for a centred box) in Idle adds one run; each side's S and K are fitted once its edge positions are 40 mm apart, and printed to hard-code. `esweep` sweeps and prints both edges without storing a run. `wcal clear` ("Clear runs") starts again. The **Edge calibration** window draws each sweep and runs these commands | `supervisor.c`, `obst_width.c` (`ow_fit_side`), `tools/mqtt/edge_cal.py` |
-| Servo straight-ahead trim `SERVO_TRIM_US` (80), settable with `servo <us>` (Idle) / "Servo trim" in the window; servo limit ±35° | `subsystem4/drv_servo.c/.h`, `task_obstacle.c`, `subsystem4.h` |
-| Obstacle bypass state machine: 50° side-step bypass (stop 15 cm from the car's front, two out-steps with a side scan after each, pass, turn back 50° and drive onto the line), side and box depth chosen from the PC (`avoid left/right`, `depth <mm>`), 60 s limit, `NO_BYPASS` fault | `supervisor.c`, `subsystem5/bypass_geom.c/.h`, `fault_flags.h/.c` |
+| **Obstacle width** (12 Nov): two-stage stop. At 40 cm (`D_WIDTH_CM`) the car stops once, the servo sweeps (face straight ahead, then each side in 5° looks to the first miss and 1° looks to pin the boundary, about 5 s since 13 Nov: servo signal 100 Hz (`SERVO_PWM_HZ`, was 50), moves 1° per 10 ms frame and waits 150 ms before each ping), the width is computed and sent, then the car follows the line again and stops at 21 cm for the bypass. The window shows the finished width only. Replaces the old profile scan and the old `2 × near edge` estimate. Since 20 Nov the two edges also choose the bypass side (next row). | `subsystem4/task_obstacle.c` (`width_sweep`, `EV_OBST_AHEAD`), `subsystem4/us_echo.c` (`us_ping_mm`), `subsystem5/obst_width.c/.h`, `supervisor.c` (`width_result`), `task_telemetry.c`, `tools/mqtt/web_panel.py` |
+| **Bypass side** (20 Nov): from the width sweep, round the side with more room. The edge that reaches more than `OW_SIDE_MARGIN_MM` (20) further from the line than the other loses; an edge out of view counts as reaching past the sweep. Centred, both edges out of view, no sweep for this obstacle, or the sweep more than `WM_SIDE_VALID_MM` (400 mm) before the stop: `BYPASS_SIDE_DEFAULT` (LEFT). The log shows `[sup] bypass side RIGHT: the box reaches further left (left edge .. mm, right edge .. mm)` and the reason in the `[sup] bypass RIGHT: stopped at ...` line. Replaces `avoid left/right` | `obst_width.c` (`ow_bypass_side`), `supervisor.c` (`width_result`, `enter`), `tools/mqtt/web_panel.py` |
+| Width calibration, per side (13 Nov): `wcal <left mm> <right mm>` in Idle adds one run; each side's S and K are fitted once its edge positions are 40 mm apart, and printed to hard-code. `esweep` sweeps and prints both edges without storing a run. `wcal clear` ("Clear runs") starts again. The **Edge calibration** window draws each sweep and runs these commands | `supervisor.c`, `obst_width.c` (`ow_fit_side`), `tools/mqtt/edge_cal.py` |
+| Servo straight-ahead trim `SERVO_TRIM_US` (80) and end calibration `SERVO_END_LEFT_US` / `SERVO_END_RIGHT_US` (−50 / −70), fixed in `drv_servo.h` (the `servo` / `servoend` commands and the raw scan were removed 20 Nov); servo limit ±35° | `subsystem4/drv_servo.c/.h`, `task_obstacle.c`, `subsystem4.h` |
+| Obstacle bypass state machine: 50° side-step bypass (stop 15 cm from the car's front, two out-steps with a side scan after each, pass, turn back 50° and drive onto the line), side from the width sweep (row above), box depth from the PC (`depth <mm>`), 60 s limit, `NO_BYPASS` fault | `supervisor.c`, `subsystem5/bypass_geom.c/.h`, `fault_flags.h/.c` |
 | MQTT: telemetry frames, JSON events, snapshot reply, mapping with ack | `lib/liblwip/sysdepend/pico_rp2040/mqtt_utk.c`, `subsystem5/task_telemetry.c` |
 | Telnet console on port 23 (copy of the USB console) | `lib/liblwip/.../telnet_utk.c/.h`, `usb_console.c`, `cyw43_utk.c` |
 | Timing diagnostics: longest / shortest release gap per task | `wcet.c/.h` |
@@ -132,9 +133,10 @@ Demo sequence: send the mapping from the PC → START → car reads a barcode (`
 | `CAR_WIDTH_MM` | `hw_alloc.h` | **180, measured** (150 body + 30 barcode sensor on the left) | bypass gap check; offset uses the half facing the obstacle (75 right / 105 left) |
 | `SENSOR_TO_AXLE_MM` | `hw_alloc.h` | **130, measured** | line sensors to wheel axle (junction turns) |
 | `SERVO_MIN_US` / `SERVO_MAX_US` | `subsystem4/drv_servo.h` | 500 / 2500 | check straight ahead is really ahead |
-| `SERVO_TRIM_US` | `subsystem4/drv_servo.h` | **80, set on the car 20 Nov** (about 7°; was 95) | straight-ahead trim, added to every servo pulse. Re-check with "Servo trim" in the window (Idle, `servo <us>`) if the sensor or horn is remounted |
+| `SERVO_TRIM_US` | `subsystem4/drv_servo.h` | **80, set on the car 20 Nov** (about 7°; was 95) | straight-ahead trim, added to every servo pulse. Re-measure and edit it here if the sensor or horn is remounted (the live `servo <us>` command was removed 20 Nov) |
 | `SERVO_LEFT_SIGN` | `subsystem4/subsystem4.h` | +1 | coarse scan should start to the RIGHT |
 | `IMPACT_MG` | `subsystem3/subsystem3.h` | 2000 | bench test |
+| `PICKUP_LIFT_MG` | `subsystem3/subsystem3.h` | 1400 (placeholder) | drive the track with `HUMP_DEBUG 1`, read "max \|a\|" in the "hump watch" lines, set it well above the highest value; then lift the running car level and check it trips. 0 turns the lift test off (the 25° tilt test stays) |
 | `BYPASS_MARGIN_MM` | `hw_alloc.h` | 50 | gap kept between the car and the obstacle |
 | `BG_E_MAX_MM` | `subsystem5/bypass_geom.h` | 120 | largest obstacle edge from the line |
 | `BG_DEPTH_DEFAULT_MM` | `subsystem5/bypass_geom.h` | 140 (the 14 cm deep practice box) | box depth the pass assumes after power-up; set it from the PC instead (`depth <mm>`, 10–300, "Box depth" in the control window). Shallower than the real box = the car's side comes closer to its back corner when it turns back to the line |
@@ -165,8 +167,6 @@ Use **Edge calibration...** in the window (under Obstacle width). It draws every
    `[sup] width cal fit over N runs: set OW_SL_E4 a OW_KL_E4 b OW_SR_E4 c OW_KR_E4 d in obst_width.h (used now until power-off)` and what each run then reads. The window shows the four values in a box you can copy from.
 6. Put the four values in `obst_width.h`, rebuild (`make -j8 NET=lwip MQTT=1`) and flash. Update the comment above them.
 
-`wcal <width>` ("Calibrate width") still works for a centred box: it splits the width evenly between the two edges.
-
 The car keeps the last 8 runs. Expect about ±15 mm: repeat runs with the same box differed by up to 2° in the boundaries, and 1° of boundary is about 7 mm per edge at 40 cm.
 
 If calibration says an edge is out of view, the box reaches past the servo's ±35° on that side: move it towards the centre, use a narrower box, or move it further away.
@@ -191,9 +191,9 @@ Must print `Opening ipv4 listen socket on port 1883`. Double-clicking `mosquitto
 |---|---|---|
 | `map` | PC → car | text pairs, e.g. `A=forward,B=left,C=right,D=uturn` (JSON also accepted); send retained, QoS 1 |
 | `map/ack` | car → PC | `ok 4: ...` or `error ...` |
-| `snapshot` → `snapshot/reply` | PC → car → PC | any payload → JSON state (state, faults, odometer, speed, x/y, heading, tilt, humps, barcodes, pending letter, `obstacle_width_mm` (last measured, 0 = none), avoid side, bypass depth, mapping) |
+| `snapshot` → `snapshot/reply` | PC → car → PC | any payload → JSON state (state, faults, odometer, speed, x/y, heading, tilt, humps, barcodes, pending letter, `obstacle_width_mm` (last measured, 0 = none), `bypass_side` (the running bypass, else the next one), bypass depth, mapping) |
 | `event` | car → PC | JSON per state change, barcode, junction, command, obstacle (`{"ev":"obstacle","width_mm":N,...}`, once per measured obstacle), hump, with x/y |
-| `cmd` | PC → car | `start`, `stop`, `mode`, `calibrate`, `avoid left\|right`, `depth <mm>`, `wcal <mm>` (width calibration, Idle only); never retained |
+| `cmd` | PC → car | `start`, `stop`, `mode`, `calibrate`, `depth <mm>`, `wcal <left> <right>` / `esweep` (width calibration, Idle only), `wcal clear`; never retained |
 | `telem` | car → PC | 14-byte binary frame every 500 ms (`subsystem5/telem_frame.h`) |
 | `heartbeat` | car → PC | `hb N` every 5 s |
 

@@ -46,7 +46,7 @@ STATE_NAME = ["Init", "Idle", "Calibrate", "LineFollow", "Junction", "Hump",
 # app_program/fault_flags.h
 FAULT_BITS = ["MOTOR_STALL", "ENC_FAULT", "IMU_SENSOR", "IMPACT", "US_FAULT",
               "OBST_STOP", "LINE_SEARCH_FAIL", "WIFI_DOWN", "INIT_FAIL",
-              "NO_BYPASS"]
+              "NO_BYPASS", "PICKUP"]
 
 BC_HYST = 200          # task_barcode.c: black above thr + 200, white below thr - 200
 
@@ -99,10 +99,12 @@ def barcode_read(raw):
     return (m.group(1), m.group(2)) if m else None
 
 
-# supervisor.c: the 50 deg side-step obstacle bypass and the PC's side setting
-# "depth" is missing in firmware from before 12 Nov
+# supervisor.c: the 50 deg side-step obstacle bypass.  "depth" is missing in
+# firmware from before 12 Nov, the reason for the side before 20 Nov.
 R_BYP_START = re.compile(r"\[sup\] bypass (LEFT|RIGHT): stopped at (\d+) cm, step 1 = (-?\d+) mm"
-                         r"(?:, depth (\d+) mm)?")
+                         r"(?:, depth (\d+) mm)?(?: \(([^)]*)\))?")
+# supervisor.c width_result (20 Nov): the side the next bypass takes
+R_BYP_SIDE = re.compile(r"\[sup\] bypass side (LEFT|RIGHT)( \(default\))?: (.*)")
 R_DEPTH_SET = re.compile(r"\[sup\] bypass depth set to (\d+) mm")
 R_BYP_SCAN = re.compile(r"\[sup\] bypass: scan (\d+) at along (-?\d+) lat (-?\d+): "
                         r"((?:\d+ ){6}\d+) cm")
@@ -116,7 +118,6 @@ R_BYP_FAIL = re.compile(r"\[sup\] bypass: (stopped too close to the obstacle to 
                         r"still blocked after the extra steps|"
                         r"obstacle too close while passing|"
                         r"bypass took longer than 60 s)")
-R_AVOID_SET = re.compile(r"\[sup\] avoid side set to (LEFT|RIGHT)")
 BYP_FAIL_WHY = {
     "stopped too close to the obstacle to turn":
         "it stopped too close to the obstacle to turn",
@@ -141,15 +142,21 @@ def bypass_depth(raw):
 def bypass_event(raw):
     """What a Supervisor bypass line says, or None.  (kind, side, text):
     kind 'start' (side 'left' / 'right'), 'phase', 'done', 'lost' (no line
-    after the bypass), 'fail' (text = the reason), 'avoid' (PC setting
-    applied, side), 'depth' (PC depth applied), 'scan' (ranges only, not a
-    new phase)."""
+    after the bypass), 'fail' (text = the reason), 'side' (the width sweep
+    chose the next bypass side), 'depth' (PC depth applied), 'scan' (ranges
+    only, not a new phase)."""
     m = R_BYP_START.search(raw)
     if m:
         return ("start", m.group(1).lower(),
-                "step 1 out to the %s (%s mm), then side scan 1%s"
+                "step 1 out to the %s (%s mm), then side scan 1%s%s"
                 % (m.group(1).lower(), m.group(3),
-                   (" (box depth assumed %s mm)" % m.group(4)) if m.group(4) else ""))
+                   (" (box depth assumed %s mm)" % m.group(4)) if m.group(4) else "",
+                   ("; " + m.group(5)) if m.group(5) else ""))
+    m = R_BYP_SIDE.search(raw)
+    if m:
+        side, default, why = m.groups()
+        return ("side", side.lower(), "next bypass on the %s%s: %s"
+                % (side, " (default side)" if default else "", why))
     m = R_DEPTH_SET.search(raw)
     if m:
         return ("depth", None, "box depth for the bypass set to %s mm (from the next "
@@ -179,10 +186,6 @@ def bypass_event(raw):
     m = R_BYP_FAIL.search(raw)
     if m:
         return ("fail", None, BYP_FAIL_WHY[m.group(1)])
-    m = R_AVOID_SET.search(raw)
-    if m:
-        return ("avoid", m.group(1).lower(), "bypass side set to %s (from the next obstacle)"
-                % m.group(1))
     return None
 R_TAG = re.compile(r"\[([A-Za-z]+)\]\s*(.*)")
 

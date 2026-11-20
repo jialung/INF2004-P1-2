@@ -5,6 +5,7 @@
  *	Worked examples are checked in tests/host/test_logic.c.
  */
 
+#include <stddef.h>
 #include "obst_width.h"
 #include "../subsystem3/imu_math.h"
 
@@ -77,6 +78,32 @@ int32_t ow_width_mm(int32_t face_mm, int32_t el_half, int32_t er_half, const OW_
 	w = ow_edge_mm(face_mm, el_half, c->sl_e4, c->kl_e4) +
 	    ow_edge_mm(face_mm, er_half, c->sr_e4, c->kr_e4);
 	return (w > 0) ? w : -1;
+}
+
+int ow_bypass_side(int32_t face_mm, int32_t el_half, int32_t er_half, int oov_l, int oov_r,
+		   const OW_CAL *c, int32_t *l_mm, int32_t *r_mm)
+{
+	int32_t l = 0, r = 0;
+	int	side = OW_GO_EITHER;
+
+	if (face_mm > 0) {
+		l = ow_edge_mm(face_mm, el_half, c->sl_e4, c->kl_e4);
+		r = ow_edge_mm(face_mm, er_half, c->sr_e4, c->kr_e4);
+		if (oov_l && oov_r) {
+			side = OW_GO_EITHER;		/* wider than the sweep */
+		} else if (oov_l) {
+			side = OW_GO_RIGHT;
+		} else if (oov_r) {
+			side = OW_GO_LEFT;
+		} else if (l - r > OW_SIDE_MARGIN_MM) {
+			side = OW_GO_RIGHT;		/* the box reaches further left */
+		} else if (r - l > OW_SIDE_MARGIN_MM) {
+			side = OW_GO_LEFT;
+		}
+	}
+	if (l_mm != NULL) *l_mm = l;
+	if (r_mm != NULL) *r_mm = r;
+	return side;
 }
 
 int ow_fit_side(const OW_POINT *p, int n, int side, int32_t *s_e4, int32_t *k_e4)

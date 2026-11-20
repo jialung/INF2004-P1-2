@@ -15,6 +15,7 @@
  *	  7    WIFI_DOWN         Telemetry             Telemetry           no, status only
  *	  8    INIT_FAIL         usermain / any init   Supervisor          yes   (new)
  *	  9    NO_BYPASS         Supervisor (bypass)   Supervisor          yes   (new)
+ *	  10   PICKUP            IMU (car lifted)      Supervisor          yes   (new)
  *
  *	Rules
  *	- Raise with fault_raise(), clear with fault_clear().  Never call
@@ -49,12 +50,14 @@
 #define FAULT_INIT_FAIL		(1U << 8)
 #define FAULT_NO_BYPASS		(1U << 9)	/* Supervisor: no side fits after the
 						   retries, or the bypass timed out */
+#define FAULT_PICKUP		(1U << 10)	/* IMU: car lifted while running */
 
 /* Bits that put the Supervisor into Fault */
 #define FAULT_TRIP_MASK		(FAULT_MOTOR_STALL | FAULT_ENC_FAULT |	\
 				 FAULT_IMU_SENSOR | FAULT_IMPACT |	\
 				 FAULT_US_FAULT | FAULT_LINE_SEARCH_FAIL | \
-				 FAULT_INIT_FAIL | FAULT_NO_BYPASS)
+				 FAULT_INIT_FAIL | FAULT_NO_BYPASS |	\
+				 FAULT_PICKUP)
 
 /* Bits that make Motion Control cut the motors this cycle */
 #define FAULT_STOP_MASK		(FAULT_TRIP_MASK | FAULT_OBST_STOP)

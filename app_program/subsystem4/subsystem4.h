@@ -50,9 +50,6 @@ typedef enum { US_OK = 0, US_NO_ECHO, US_NO_RISE } US_RESULT;
 #define SCAN_FINE_SETTLE_MS	60
 #define SCAN_PING_GAP_MS	30	/* between the two pings of one look */
 
-/* Raw scan (20 Nov, TEMPORARY: "rscan", task_obstacle.c raw_scan) */
-#define RS_PINGS		5	/* pings per 1 deg look */
-#define RS_PING_GAP_MS		60	/* HC-SR04 datasheet: >= 60 ms per measurement */
 #define SCAN_SIDE_MAX_DEG	35	/* servo never goes further than this
 					   from straight ahead (13 Nov: 30 -> 35,
 					   the mount now holds at 35).  Only the

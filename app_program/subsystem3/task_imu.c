@@ -15,6 +15,8 @@
  *	                 -> height (FR7, FR8).  One wheel on the hump = roll.
  *	  impact         horizontal acceleration above IMPACT_MG twice in a
  *	                 row -> IMPACT fault (JY-1.12)
+ *	  pickup         while running: tilt past PICKUP_TILT_Q, or |a| above
+ *	                 PICKUP_LIFT_MG off a hump -> PICKUP fault, motors cut
  *	  sensor fault   IMU_FAIL_LIMIT failed reads in a row -> IMU_SENSOR
  *
  *	Calibrate (MODE held 2 s, together with the IR sensors), JY-1.13:
@@ -40,7 +42,9 @@ LOCAL INT	fails;
 LOCAL INT	run_n;		/* consecutive samples past the threshold */
 LOCAL INT	peak_q;
 LOCAL INT	impact_n;
-LOCAL UW	impact_hold_until;	/* no impact check right after a hump */
+LOCAL UW	impact_hold_until;	/* no impact / lift check right after a hump */
+LOCAL INT	pickup_tilt_n;		/* consecutive samples past PICKUP_TILT_Q */
+LOCAL INT	pickup_lift_n;		/* consecutive samples past PICKUP_LIFT_MG */
 
 /* Offsets, replaced by each calibration.  Power-up values from the
    calibration on 30 Oct (evening):
@@ -260,21 +264,25 @@ LOCAL void hump_step(INT s, UH odo_mm)
 	/* once a second while following: what the hump code sees */
 	{
 		LOCAL INT  dbg_n, dbg_max = -32767, dbg_min = 32767;
+		LOCAL UW   dbg_amax;		/* highest |a|, mg: tunes PICKUP_LIFT_MG */
 		INT        hc = h_x10_of(lat_now, imu_cal.lat0_q14);	/* vs calibration */
 
 		/* signed: + = right wheel up, - = left wheel up */
 		if (hs > dbg_max) dbg_max = hs;
 		if (hs < dbg_min) dbg_min = hs;
+		if (acc_mag > dbg_amax) dbg_amax = acc_mag;
 		if (++dbg_n >= (1000 / PERIOD_IMU_MS)) {
 			tm_printf((UB*)"[imu] hump watch: right wheel now %d, min %d max %d "
 				"(0.1 mm, last 1 s; trigger %d), vs calibration %d, %s; "
-				"accel raw x %d y %d z %d\n",
+				"accel raw x %d y %d z %d; max |a| %d mg (lift trip %d)\n",
 				hs, dbg_min, dbg_max, (INT)HUMP_ENTER_X10, hc,
 				(navi.terrain == TER_CLIMBING) ? "ON HUMP" : "level",
-				(INT)raw_now.ax, (INT)raw_now.ay, (INT)raw_now.az);
+				(INT)raw_now.ax, (INT)raw_now.ay, (INT)raw_now.az,
+				(INT)dbg_amax, (INT)PICKUP_LIFT_MG);
 			dbg_n = 0;
 			dbg_max = -32767;
 			dbg_min = 32767;
+			dbg_amax = 0;
 		}
 	}
 #endif
@@ -480,6 +488,44 @@ LOCAL void check_calibrate(void)
 	}
 }
 
+/* Pickup (subsystem3.h PICKUP_*): the car lifted while running.  Uses
+   this sample's calibrated roll / pitch (navi) and |a| (acc_mag, set by
+   lateral_q14), so it runs after both.  The fault latches: put the car
+   down and press MODE to clear it, as for the other trip faults. */
+LOCAL void pickup_check(void)
+{
+	INT  r = (navi.roll_q < 0) ? -navi.roll_q : navi.roll_q;
+	INT  p = (navi.pitch_q < 0) ? -navi.pitch_q : navi.pitch_q;
+	BOOL running = !cal_on && SYS_IS_RUNNING(sys_state_get());
+	BOOL hump_quiet = navi.terrain != TER_CLIMBING &&
+			  (W)(now_us() - impact_hold_until) >= 0;
+
+	if (!running || (fault_peek() & FAULT_PICKUP)) {
+		pickup_tilt_n = 0;
+		pickup_lift_n = 0;
+		return;
+	}
+
+	/* only a sample near 1 g is a tilt; any other is motion (subsystem3.h) */
+	pickup_tilt_n = ((r > PICKUP_TILT_Q || p > PICKUP_TILT_Q) &&
+			 acc_mag >= (UW)PICKUP_TILT_G_LO && acc_mag <= (UW)PICKUP_TILT_G_HI) ?
+			pickup_tilt_n + 1 : 0;
+	pickup_lift_n = (PICKUP_LIFT_MG > 0 && hump_quiet &&
+			 acc_mag > (UW)PICKUP_LIFT_MG) ? pickup_lift_n + 1 : 0;
+
+	if (pickup_tilt_n >= PICKUP_TILT_N) {
+		tm_printf((UB*)"[imu] PICKUP: tilted, roll %d pitch %d (0.25 deg, limit %d), "
+			  "|a| %d mg, %d ms\n",
+			  (INT)navi.roll_q, (INT)navi.pitch_q, (INT)PICKUP_TILT_Q,
+			  (INT)acc_mag, (INT)(PICKUP_TILT_N * PERIOD_IMU_MS));
+		fault_raise(FAULT_PICKUP);
+	} else if (pickup_lift_n >= PICKUP_LIFT_N) {
+		tm_printf((UB*)"[imu] PICKUP: lifted, |a| %d mg (limit %d)\n",
+			  (INT)acc_mag, (INT)PICKUP_LIFT_MG);
+		fault_raise(FAULT_PICKUP);
+	}
+}
+
 LOCAL void process(const IMU_RAW *raw)
 {
 	NAV_STATE	ns;
@@ -535,6 +581,8 @@ LOCAL void process(const IMU_RAW *raw)
 	} else {
 		impact_n = 0;
 	}
+
+	pickup_check();
 }
 
 EXPORT void imu_task(INT stacd, void *exinf)

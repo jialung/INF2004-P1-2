@@ -86,7 +86,6 @@
       <button role="tab" data-tab="drive">Drive</button>
       <button role="tab" data-tab="mapping">Barcode mapping</button>
       <button role="tab" data-tab="bypass">Obstacle bypass</button>
-      <button role="tab" data-tab="calib">Width &amp; servo</button>
       <button role="tab" data-tab="edge">Edge calibration</button>
     </nav>
 
@@ -124,15 +123,15 @@
 
     <!-- Obstacle bypass -->
     <section class="card panel" data-panel="bypass">
-      <p class="muted">Used from the next obstacle; the car beeps when it takes a setting.
-        Not stored on the car: after power-up it is LEFT and the default depth again.</p>
-      <h3>Go round on the</h3>
-      <div class="seg big-seg" id="avoid-seg">
-        <button data-side="left">&larr; LEFT</button>
-        <button data-side="right">RIGHT &rarr;</button>
-      </div>
-      <p id="avoid-note" class="note small"></p>
+      <h3>Side</h3>
+      <p class="muted">The car picks the side by itself: it measures both edges of the box about
+        40 cm before it and goes round the side with more room. A centred box, or one it could
+        not measure, is passed on the LEFT.</p>
+      <div class="big" id="side-now">&ndash;</div>
+      <p id="side-note" class="note small"></p>
       <h3>Box depth the bypass assumes</h3>
+      <p class="muted small">Used from the next obstacle; the car beeps when it takes it.
+        Not stored on the car: after power-up it is the default again.</p>
       <form id="depth-form" class="inline-form" novalidate>
         <input id="depth-range" type="range" step="10">
         <input id="depth-in" type="number" class="num" step="10"><span class="unit">mm</span>
@@ -140,54 +139,6 @@
       </form>
       <p class="muted small" id="depth-help"></p>
       <p id="depth-note" class="note small"></p>
-    </section>
-
-    <!-- Width calibration and servo trim -->
-    <section class="card panel" data-panel="calib">
-      <h3>Width calibration <span class="muted">(Idle only)</span></h3>
-      <p class="muted small">One run per press, with a box of known width centred about 40 cm in front of the car.
-        For left and right edges separately, use <a href="#" data-goto="edge">Edge calibration</a>.</p>
-      <form id="wcal-form" class="inline-form" novalidate>
-        <label for="wcal-in">Known box</label>
-        <input id="wcal-in" type="number" class="num" step="10" value="150"><span class="unit">mm</span>
-        <button type="submit" class="btn primary">Calibrate width</button>
-        <button type="button" id="btn-wcal-clear" class="btn ghost">Clear runs</button>
-      </form>
-      <p id="wcal-error" class="error small" hidden></p>
-
-      <h3>Servo straight-ahead trim <span class="muted">(Idle only)</span></h3>
-      <p class="muted small">Nudge until the sensor points straight ahead, then copy the value into
-        <code>SERVO_TRIM_US</code> in <code>subsystem4/drv_servo.h</code>. Each arrow is about 0.5&deg;
-        and is sent at once; swap them if the sensor turns the wrong way.</p>
-      <form id="trim-form" class="inline-form" novalidate>
-        <button type="button" class="btn" id="trim-left" title="Towards the left">&#9664; 5</button>
-        <input id="trim-in" type="number" class="num" step="5"><span class="unit">us</span>
-        <button type="button" class="btn" id="trim-right" title="Towards the right">5 &#9654;</button>
-        <button type="submit" class="btn primary">Set</button>
-      </form>
-      <p id="trim-error" class="error small" hidden></p>
-      <!-- TEMPORARY (19 Nov): servo end calibration -->
-      <h3>Servo ends <span class="muted">(Idle only)</span></h3>
-      <p class="muted small">Go moves the servo to that side's end (<span id="send-deg">35</span>&deg;) and holds it.
-        Adjust until the end is where you want it, + = further out, about 11 us per degree. Straight ahead stays on the trim.
-        Copy the values into <code>SERVO_END_LEFT_US</code> / <code>SERVO_END_RIGHT_US</code> in <code>subsystem4/drv_servo.h</code>.</p>
-      <form id="send-form" class="inline-form">
-        <label for="send-l">Left</label>
-        <input id="send-l" type="number" class="num" value="0"><span class="unit">us</span>
-        <button type="button" class="btn" id="send-l-go">Go</button>
-        <label for="send-r">Right</label>
-        <input id="send-r" type="number" class="num" value="0"><span class="unit">us</span>
-        <button type="button" class="btn" id="send-r-go">Go</button>
-        <button type="button" class="btn ghost" id="send-ahead">Ahead</button>
-      </form>
-      <!-- TEMPORARY (20 Nov): raw scan for the width sweep diagnosis -->
-      <h3>Raw scan <span class="muted">(Idle only)</span></h3>
-      <p class="muted small">Turns the sensor 1&deg; at a time from the right end to the left end (&plusmn;35&deg;)
-        and pings 5 times at each angle, about 35 s. The readings go to the log, under Ultrasonic / obstacle,
-        as <code>rscan &lt;deg&gt;: &lt;5 readings&gt; mm (min, mid)</code>; - = no echo. Nothing is stored.</p>
-      <div class="button-row">
-        <button type="button" class="btn" id="btn-rscan">Raw scan</button>
-      </div>
     </section>
 
     <!-- Edge calibration -->

@@ -202,7 +202,6 @@ input[type=checkbox] { accent-color: var(--accent); }
 .seg button:hover { background: #232d38; }
 .seg button[aria-pressed=true] { background: #1f6feb; color: #fff; font-weight: 600; }
 .seg button.pending { box-shadow: inset 0 -3px 0 var(--wait); }
-.big-seg button { font-size: 15px; font-weight: 600; padding: 10px 28px; }
 
 .note { margin-top: 8px; padding: 6px 10px; border-radius: 7px; background: var(--card-2);
   border-left: 3px solid var(--muted); }

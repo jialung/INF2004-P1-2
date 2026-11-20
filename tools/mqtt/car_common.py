@@ -7,14 +7,11 @@ console line patterns and the command limits.  No user interface here.
 Topics (prefix = MQTT_CLIENT_ID in config/wifi_secrets.h):
   cmd          PC -> car   "start" / "stop" / "mode" (MODE short press) /
                            "calibrate" (MODE held 2 s) /
-                           "avoid left" / "avoid right" / "depth <mm>" /
-                           "wcal <mm>" (centred box) / "wcal <left> <right>"
-                           (each edge from the centre line) / "esweep"
-                           (measure only) / "wcal clear" (all Idle only) /
-                           "servo <us>" (servo straight-ahead trim, Idle only) /
-                           "servoend left|right <us>" / "servoend ahead"
-                           (TEMPORARY: servo end calibration, Idle only)
-                           (never retained)
+                           "depth <mm>" / "wcal <left> <right>" (each edge
+                           from the centre line, Idle only) / "esweep"
+                           (measure only, Idle only) / "wcal clear"
+                           (never retained).  The bypass side is not a
+                           command: the car picks it from the width sweep.
   cmd/ack      car -> PC   "ok ..." / "refused ..." / "error ..."
   map, map/ack             mapping and the car's answer
   snapshot, snapshot/reply
@@ -137,6 +134,8 @@ FAULT_WHY = {
     "NO_BYPASS": "The obstacle bypass gave up: it stopped too close to turn, "
                  "the side scan still saw the obstacle after 2 extra steps, the "
                  "obstacle was too close while passing, or it took longer than 60 s.",
+    "PICKUP": "The car was picked up while running: the IMU saw it held tilted "
+              "past 25 degrees for 0.3 s, or jerk upwards. Put it back on the track.",
 }
 
 
@@ -147,7 +146,7 @@ def trip_names(faults):
 
 
 def explain_stop(state, faults, v, idle_cause=None, fault_from=None,
-                 state_age=None, bypass=None, bypass_fail=None, avoid=None,
+                 state_age=None, bypass=None, bypass_fail=None, side=None,
                  measuring=False):
     """(kind, headline, detail).  kind: 'moving' | 'info' (deliberate, or not
     known yet) | 'stopped' | 'fault'.  idle_cause is a (headline, detail) the
@@ -156,7 +155,7 @@ def explain_stop(state, faults, v, idle_cause=None, fault_from=None,
     state (the speed from before the change is stale), state_age is how many
     seconds the car has been in this state.  bypass = the current bypass
     phase from the car's log, bypass_fail = why the last bypass gave up,
-    avoid = the bypass side this window knows ('left' / 'right' / None),
+    side = the side the car chose for this obstacle ('left' / 'right' / None),
     measuring = the car stopped to measure an obstacle's width."""
     if state is None:
         return ("info", "Waiting for the car", "No state received yet.")
@@ -185,9 +184,10 @@ def explain_stop(state, faults, v, idle_cause=None, fault_from=None,
         # the stop at 21 cm: the bypass starts at once
         return ("info", "Obstacle ahead",
                 "The ultrasonic guard saw something 15 cm in front of the car. It "
-                "goes round it %s." % (("on the %s" % avoid.upper()) if avoid else
-                                       "on the side set with Avoid LEFT / RIGHT "
-                                       "(LEFT after power-up)"))
+                "goes round it %s." % (("on the %s" % side.upper()) if side else
+                                       "on the side with more room (from the width "
+                                       "sweep; LEFT if the box was centred or not "
+                                       "measured)"))
     if state == "idle":
         head, detail = idle_cause or ("Idle", "Ready: press START.")
         return ("stopped", head, detail)
@@ -210,7 +210,7 @@ def explain_stop(state, faults, v, idle_cause=None, fault_from=None,
             return ("info", "Measuring obstacle width",
                     "Stopped about 40 cm from an obstacle while the servo sweeps "
                     "to find its two edges (about 6 s). The car then carries on "
-                    "and goes round it.")
+                    "and goes round it on the side with more room.")
         if state == "junction":
             return ("info", "Junction: turning on the spot",
                     "Stopped over the crossing, pivoting to the new direction.")
@@ -243,23 +243,7 @@ DEFAULT_MOVE = "forward"              # what the car boots with
 BYPASS_DEPTH_DEFAULT = 140
 BYPASS_DEPTH_MIN = 10
 BYPASS_DEPTH_MAX = 300
-
-# Width calibration: the known box width the car is told, mm
-# (subsystem5.h: WM_CAL_MIN_MM, WM_CAL_MAX_MM)
-WIDTH_CAL_MIN = 50
-WIDTH_CAL_MAX = 300
-
-# Servo straight-ahead trim, us (subsystem4/drv_servo.h: SERVO_TRIM_MAX_US).
-# + = longer pulse = towards the servo's 180 deg end, which the firmware
-# takes as LEFT (SERVO_LEFT_SIGN +1, still to be checked on the car).
-SERVO_TRIM_MAX = 200
-SERVO_TRIM_STEP = 5                   # ~0.5 deg
-SERVO_TRIM_DEFAULT = 80               # = SERVO_TRIM_US: what the car boots with
-# TEMPORARY (19 Nov): servo end calibration (drv_servo.h SERVO_END_MAX_US,
-# subsystem4.h SCAN_SIDE_MAX_DEG)
-SERVO_END_MAX = 150
-SERVO_END_STEP = 5                    # ~0.5 deg at the end
-SERVO_SIDE_MAX_DEG = 35
+BYPASS_SIDE_DEFAULT = "left"          # subsystem5.h BYPASS_SIDE_DEFAULT
 
 LOG_MAX_LINES = 5000                  # older lines are removed from the view
 OFFLINE_AFTER_S = 12                  # heartbeat is every 5 s

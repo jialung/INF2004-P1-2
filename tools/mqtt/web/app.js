@@ -198,12 +198,11 @@ function applyStatus(s) {
     setText("#ow-note", s.width.mm ? "last obstacle" : "measured about 40 cm before an obstacle");
   }
 
-  // bypass side and depth
-  for (const b of $$("#avoid-seg button")) {
-    b.setAttribute("aria-pressed", String(b.dataset.side === s.avoid.side));
-  }
-  note("#avoid-note", "Car has: " + (s.avoid.side ? s.avoid.side.toUpperCase() : "?") +
-       " \u2014 " + s.avoid.note, s.avoid.tone);
+  // bypass side (chosen by the car) and depth
+  const sn = $("#side-now");
+  setText(sn, s.side.side ? (s.side.side === "left" ? "\u2190 LEFT" : "RIGHT \u2192") : "\u2013");
+  sn.className = "big" + (s.side.side ? " good" : "");
+  note("#side-note", s.side.note, s.side.tone);
   note("#depth-note", "Car has: " + (s.depth.mm ? s.depth.mm + " mm" : "?") +
        " \u2014 " + s.depth.note, s.depth.tone);
   note("#map-note", s.map_note.text, s.map_note.tone);
@@ -245,7 +244,6 @@ function buildForms(s) {
 
   // tabs
   for (const b of $$(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
-  for (const a of $$("[data-goto]")) a.addEventListener("click", (e) => { e.preventDefault(); showTab(a.dataset.goto); });
   showTab(prefs.tab);
 
   // drive
@@ -281,8 +279,7 @@ function buildForms(s) {
   $("#btn-map-reset").addEventListener("click", () => fillMap(Object.assign({}, CFG.default_map,
                                                                        { default: CFG.default_move })));
 
-  // bypass
-  for (const b of $$("#avoid-seg button")) b.addEventListener("click", () => cmd("avoid " + b.dataset.side));
+  // bypass depth
   const [dmin, dmax, ddef] = L.depth;
   const dr = $("#depth-range"), di = $("#depth-in");
   for (const n of [dr, di]) { n.min = dmin; n.max = dmax; }
@@ -296,51 +293,6 @@ function buildForms(s) {
     if (mm == null) return toast(`Box depth: a whole number of mm, ${dmin} to ${dmax}.`, "bad");
     cmd("depth " + mm);
   });
-
-  // width calibration
-  const wi = $("#wcal-in");
-  wi.min = L.wcal[0]; wi.max = L.wcal[1];
-  $("#wcal-form").addEventListener("submit", calibrateWidth);
-  $("#btn-wcal-clear").addEventListener("click", clearRuns);
-
-  // servo trim
-  const [tmin, tmax, tstep] = L.trim;
-  const ti = $("#trim-in");
-  ti.min = tmin; ti.max = tmax; ti.value = s.trim;
-  const nudge = (d) => {
-    const cur = Number.isInteger(+ti.value) && ti.value !== "" ? +ti.value : 0;
-    ti.value = Math.max(tmin, Math.min(tmax, cur + d));
-    ti.classList.remove("invalid");
-    cmd("servo " + ti.value);
-  };
-  $("#trim-left").addEventListener("click", () => nudge(+tstep));
-  $("#trim-right").addEventListener("click", () => nudge(-tstep));
-  $("#trim-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const us = intIn(ti, tmin, tmax);
-    if (us == null) return toast(`Servo trim: a whole number of us, ${tmin} to ${tmax}.`, "bad");
-    cmd("servo " + us);
-  });
-
-  // TEMPORARY (19 Nov): servo end calibration
-  const [emin, emax, estep, edeg] = L.servo_end;
-  setText("#send-deg", String(edeg));
-  for (const [side, id] of [["left", "#send-l"], ["right", "#send-r"]]) {
-    const n = $(id);
-    n.min = emin; n.max = emax; n.step = estep;
-    const go = () => {
-      const us = intIn(n, emin, emax);
-      if (us == null) return toast(`Servo ${side} end: a whole number of us, ${emin} to ${emax}.`, "bad");
-      cmd(`servoend ${side} ${us}`);
-    };
-    $(id + "-go").addEventListener("click", go);
-    n.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
-  }
-  $("#send-form").addEventListener("submit", (e) => e.preventDefault());
-  $("#send-ahead").addEventListener("click", () => cmd("servoend ahead"));
-
-  // TEMPORARY (20 Nov): raw scan
-  $("#btn-rscan").addEventListener("click", () => cmd("rscan"));
 
   // edge calibration
   setText("#spread", String(L.spread));
@@ -424,30 +376,6 @@ function sendMap() {
   const d = $("#map-default button[aria-pressed=true]");
   body.default = d ? d.dataset.word : CFG.default_move;
   post("map", body);
-}
-
-/* width calibration */
-async function calibrateWidth(e) {
-  e.preventDefault();
-  const [lo, hi] = CFG.limits.wcal;
-  const mm = intIn($("#wcal-in"), lo, hi);
-  const err = $("#wcal-error");
-  err.hidden = mm != null;
-  if (mm == null) { setText(err, `Enter the box width as a whole number of mm, ${lo} to ${hi}.`); return; }
-  const ok = await confirmBox("Calibrate width",
-    `<ul>
-       <li>Car in <b>Idle</b> (blue LED), not moving.</li>
-       <li>A box exactly <b>${mm} mm</b> wide in front of it, centred on the car, flat face square to the car,
-           about <b>40 cm</b> from the ultrasonic sensor.</li>
-     </ul>
-     <p>After OK the servo sweeps for about 6 s and the run is added to the ones since power-up
-     (Clear runs starts again). Each side is fitted on its own once its edge positions are
-     ${CFG.limits.spread} mm apart: use boxes of different widths, or Edge calibration, which lets you
-     shift one box sideways.</p>
-     <p>The log then shows <code>set OW_SL_E4 .. OW_KR_E4 ..</code>: copy all four into
-     <code>app_program/subsystem5/obst_width.h</code> and rebuild. The car uses them straight away,
-     until power-off.</p>`, "Start sweep");
-  if (ok) cmd("wcal " + mm);
 }
 
 async function clearRuns() {

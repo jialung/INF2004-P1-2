@@ -53,7 +53,7 @@ EXPORT const char *fault_name(UINT bits)
 	LOCAL const char *const names[] = {
 		"MOTOR_STALL", "ENC_FAULT", "IMU_SENSOR", "IMPACT", "US_FAULT",
 		"OBST_STOP", "LINE_SEARCH_FAIL", "WIFI_DOWN", "INIT_FAIL",
-		"NO_BYPASS"
+		"NO_BYPASS", "PICKUP"
 	};
 	UINT	i;
 

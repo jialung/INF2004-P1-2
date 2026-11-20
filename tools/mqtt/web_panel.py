@@ -68,9 +68,7 @@ TOPICS_IN = (mu.TOPIC_ACK, mu.TOPIC_SNAP_REPLY, mu.TOPIC_CMD_ACK, mu.TOPIC_LOG,
              mu.TOPIC_EVENT, mu.TOPIC_HB, mu.TOPIC_TELEM)
 
 # commands the panel may send on the cmd topic (remote_cmd.h)
-FIXED_CMDS = {"start", "stop", "mode", "calibrate", "esweep", "wcal clear",
-              "avoid left", "avoid right",
-              "rscan"}                    # TEMPORARY (20 Nov): raw scan
+FIXED_CMDS = {"start", "stop", "mode", "calibrate", "esweep", "wcal clear"}
 R_BROKER = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]*(:\d{1,5})?")
 
 
@@ -88,11 +86,6 @@ def check_cmd(word):
         lo, hi = mu.BYPASS_DEPTH_MIN, mu.BYPASS_DEPTH_MAX
         return None if lo <= int(m.group(1)) <= hi else \
             "Box depth must be %d to %d mm." % (lo, hi)
-    m = re.fullmatch(r"wcal (\d{1,4})", word)
-    if m:
-        lo, hi = mu.WIDTH_CAL_MIN, mu.WIDTH_CAL_MAX
-        return None if lo <= int(m.group(1)) <= hi else \
-            "Box width must be %d to %d mm." % (lo, hi)
     m = re.fullmatch(r"wcal (-?\d{1,4}) (-?\d{1,4})", word)
     if m:
         left, right = int(m.group(1)), int(m.group(2))
@@ -103,19 +96,6 @@ def check_cmd(word):
             return ("Left + right is the box width: it must be %d to %d mm."
                     % (edge_cal.WIDTH_MIN, edge_cal.WIDTH_MAX))
         return None
-    m = re.fullmatch(r"servo (-?\d{1,4})", word)
-    if m:
-        mx = mu.SERVO_TRIM_MAX
-        return None if -mx <= int(m.group(1)) <= mx else \
-            "Servo trim must be %d to %d us." % (-mx, mx)
-    # TEMPORARY (19 Nov): servo end calibration
-    if word == "servoend ahead":
-        return None
-    m = re.fullmatch(r"servoend (left|right) (-?\d{1,4})", word)
-    if m:
-        mx = mu.SERVO_END_MAX
-        return None if -mx <= int(m.group(2)) <= mx else \
-            "Servo end must be %d to %d us." % (-mx, mx)
     return "Unknown command."
 
 
@@ -142,13 +122,8 @@ def config():
         "log_max": mu.LOG_MAX_LINES,
         "limits": {
             "depth": [mu.BYPASS_DEPTH_MIN, mu.BYPASS_DEPTH_MAX, mu.BYPASS_DEPTH_DEFAULT],
-            "wcal": [mu.WIDTH_CAL_MIN, mu.WIDTH_CAL_MAX],
             "edge": [edge_cal.EDGE_MIN, edge_cal.EDGE_MAX],
             "box": [edge_cal.WIDTH_MIN, edge_cal.WIDTH_MAX],
-            "trim": [-mu.SERVO_TRIM_MAX, mu.SERVO_TRIM_MAX, mu.SERVO_TRIM_STEP,
-                     mu.SERVO_TRIM_DEFAULT],
-            "servo_end": [-mu.SERVO_END_MAX, mu.SERVO_END_MAX, mu.SERVO_END_STEP,
-                          mu.SERVO_SIDE_MAX_DEG],
             "spread": edge_cal.SPREAD_MM,
         },
         "edge_geom": {"pivot": edge_cal.PIVOT_MM, "side_max": edge_cal.SIDE_MAX_DEG},
@@ -221,19 +196,18 @@ class Car:
         # obstacle bypass and width
         self.byp_phase = None
         self.byp_fail = None
-        self.avoid_sent = None
         self.depth_sent = None
         self.measuring = False
         self.edge = edge_cal.EdgeData()
-        self.avoid = {"side": None, "tone": "wait",
-                      "note": "not confirmed: the car starts with LEFT; pick a side "
-                              "or press Snapshot"}
+        # the side the car chose (width sweep) or used (bypass start)
+        self.side = {"side": None, "tone": "wait",
+                     "note": "no obstacle measured yet: the car picks the side at "
+                             "the next one"}
         self.depth = {"mm": None, "tone": "wait",
                       "note": "not confirmed: the car starts with %d mm; press Set "
                               "or Snapshot" % mu.BYPASS_DEPTH_DEFAULT}
         self.mapping = dict(mu.DEFAULT, default=mu.DEFAULT_MOVE)
         self.map_note = {"text": "not sent from this panel yet", "tone": "wait"}
-        self.trim = mu.SERVO_TRIM_DEFAULT
         self.wheel_now = "waiting for the IMU"
         self.acc_raw = "waiting for the IMU"
         self.clear_readings()
@@ -424,8 +398,9 @@ class Car:
             return
         if snap.get("state"):
             self.on_state(str(snap["state"]))
-        if snap.get("avoid") in ("left", "right"):
-            self.avoid_confirmed(snap["avoid"], "snapshot")
+        if snap.get("bypass_side") in ("left", "right") and self.side["side"] is None:
+            # the snapshot cannot say why: only fill in an unknown side
+            self.side_seen(snap["bypass_side"], "next bypass, from the snapshot", "wait")
         if isinstance(snap.get("depth_mm"), int):
             self.depth_confirmed(snap["depth_mm"], "snapshot")
         w = snap.get("obstacle_width_mm")           # 0 = none measured yet
@@ -522,10 +497,8 @@ class Car:
         self.hump = {"text": text, "info": info, "at": "at " + hms(), "climbing": False}
 
     # ---- obstacle bypass side and depth ----------------------------------
-    def avoid_confirmed(self, side, how):
-        if self.avoid_sent == side:
-            self.avoid_sent = None
-        self.avoid = {"side": side, "note": "%s %s" % (how, hms()), "tone": "ok"}
+    def side_seen(self, side, why, tone="ok"):
+        self.side = {"side": side, "note": "%s  %s" % (why, hms()), "tone": tone}
 
     def depth_confirmed(self, mm, how):
         if self.depth_sent == mm:
@@ -533,14 +506,8 @@ class Car:
         self.depth = {"mm": mm, "note": "%s %s" % (how, hms()), "tone": "ok"}
 
     def on_cmd_ack(self, payload):
-        """'ok avoid left ...' / 'ok depth 140 mm ...' = queued; the car's
-        own log line (with the beep) confirms it applied."""
-        m = re.match(r"ok avoid (left|right)\b", payload)
-        if m:
-            if self.avoid_sent == m.group(1):
-                self.avoid.update(note="car accepted %s, waiting for the beep"
-                                  % m.group(1).upper(), tone="wait")
-            return
+        """'ok depth 140 mm ...' = queued; the car's own log line (with the
+        beep) confirms it applied."""
         m = re.match(r"ok depth (\d+) mm", payload)
         if m:
             if self.depth_sent == int(m.group(1)):
@@ -552,11 +519,6 @@ class Car:
             self.depth.update(note="refused: " + payload[7:], tone="bad")
             return
         if payload.startswith("error: unknown command"):
-            if self.avoid_sent and "avoid" not in payload:
-                self.avoid_sent = None
-                self.avoid = {"side": None, "tone": "bad",
-                              "note": "this car's firmware has no avoid command: "
-                                      "flash the new image"}
             if self.depth_sent is not None and "depth" not in payload:
                 self.depth_sent = None
                 self.depth = {"mm": None, "tone": "bad",
@@ -575,14 +537,16 @@ class Car:
         if kind == "start":
             self.byp_fail = None
             self.byp_phase = text
-            self.avoid_confirmed(side, "used at the obstacle")
+            m = ll.R_BYP_START.search(line)
+            why = m.group(5) if m and m.group(5) else "used at the obstacle"
+            self.side_seen(side, "bypassing now: " + why)
         elif kind in ("phase", "lost", "done"):
             self.byp_phase = text
         elif kind == "fail":
             self.byp_fail = text
             self.byp_phase = None
-        elif kind == "avoid":
-            self.avoid_confirmed(side, "set on the car")
+        elif kind == "side":
+            self.side_seen(side, text[0].upper() + text[1:])
 
     # ---- state, speed, why stopped ---------------------------------------
     def on_state(self, name):
@@ -662,7 +626,7 @@ class Car:
         age = None if self.state_t is None else time.time() - self.state_t
         kind, head, detail = mu.explain_stop(
             self.cur_state, self.cur_faults, self.cur_v, cause, self.fault_from,
-            age, self.byp_phase, self.byp_fail, self.avoid["side"], self.measuring)
+            age, self.byp_phase, self.byp_fail, self.side["side"], self.measuring)
         key = (kind, self.cur_state, self.cur_faults & (mu.TRIP_MASK | mu.OBST_BIT))
         if key != self.why_key:
             self.why_key = key
@@ -724,9 +688,8 @@ class Car:
                 "why": why, "speed": speed, "barcode": self.bc, "hump": self.hump,
                 "wheel_now": self.wheel_now, "acc_raw": self.acc_raw,
                 "width": {"mm": self.obst_w, "measuring": self.measuring},
-                "avoid": self.avoid, "depth": self.depth,
+                "side": self.side, "depth": self.depth,
                 "mapping": self.mapping, "map_note": self.map_note,
-                "trim": self.trim,
                 "replies": list(self.replies),
                 "edge": {"looks": e.looks, "face": e.face, "bound": e.bound,
                          "oov": e.oov, "edges": e.edges, "known": e.known,
@@ -742,18 +705,11 @@ class Car:
         with self.lock:
             if word == "stop":
                 self.ui_stop_t = time.time()  # lets "why stopped" name the panel
-            elif word.startswith("avoid "):
-                side = word[6:]
-                self.avoid_sent = side
-                self.avoid.update(note="sent %s, waiting for the car" % side.upper(),
-                                  tone="wait")
             elif word.startswith("depth "):
                 mm = int(word[6:])
                 self.depth_sent = mm
                 self.depth.update(note="sent %d mm, waiting for the car" % mm,
                                   tone="wait")
-            elif word.startswith("servo "):
-                self.trim = int(word[6:])
             self.dirty = True
         # never retained: a retained "start" would restart the car on reconnect
         self.publish(mu.TOPIC_CMD, word, retain=False, done="sent: " + word)

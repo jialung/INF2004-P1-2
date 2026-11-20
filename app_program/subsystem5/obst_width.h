@@ -82,6 +82,16 @@ typedef struct {
 #define OW_SIDE_LEFT		0
 #define OW_SIDE_RIGHT		1
 
+/* Bypass side (20 Nov): go round on the side with more room.  The box
+   reaches further out on one side when that side's edge is more than
+   this further from the line than the other.  Less = centred: no
+   preference (the Supervisor then uses BYPASS_SIDE_DEFAULT).  1 deg of
+   boundary noise is ~7 mm of edge at 40 cm, on each side. */
+#define OW_SIDE_MARGIN_MM	20
+#define OW_GO_LEFT		(+1)
+#define OW_GO_RIGHT		(-1)
+#define OW_GO_EITHER		0
+
 /* tan of an angle in 0.1 deg (any sign, |t| < 900), Q14 (16384 = 1.0) */
 int32_t ow_tan_q14(int32_t tenth_deg);
 
@@ -97,6 +107,15 @@ int32_t ow_edge_mm(int32_t face_mm, int32_t e_half, int32_t s_e4, int32_t k_e4);
 /* Width in mm (left edge + right edge), or -1 if it is not positive or
    the inputs are unusable (an edge out of view is the caller's check). */
 int32_t ow_width_mm(int32_t face_mm, int32_t el_half, int32_t er_half, const OW_CAL *c);
+
+/* Which side to go round, from one width sweep: OW_GO_LEFT, OW_GO_RIGHT
+   or OW_GO_EITHER (centred within OW_SIDE_MARGIN_MM, both edges out of
+   view, or no face).  oov_l / oov_r: that edge was still on the box at the
+   servo limit, so the box reaches far out on that side: go the other
+   way.  *l_mm / *r_mm (may be NULL): each edge from the line, + = out on
+   its own side, as ow_edge_mm (for an edge out of view: the least it is). */
+int ow_bypass_side(int32_t face_mm, int32_t el_half, int32_t er_half, int oov_l, int oov_r,
+		   const OW_CAL *c, int32_t *l_mm, int32_t *r_mm);
 
 /* Least-squares S and K of one side (OW_SIDE_*) over n calibration runs.
    0 = done, -1 = not possible (fewer than 2 runs, that side's known edges

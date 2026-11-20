@@ -63,7 +63,10 @@ IMPORT ID tid_telemetry;
 #define BYPASS_SPEED		SPD_HUMP	/* straight legs; Motion maps SPD_HUMP drives to DRIVE_BYPASS_PM (46 mm/s) */
 #define BYPASS_TIMEOUT_MS	60000	/* whole bypass, from the stop until
 					   LineFollow / LineSearch */
-#define BYPASS_SIDE_DEFAULT	(+1)	/* +1 left, -1 right, after power-up */
+/* The bypass side comes from the width sweep (obst_width.h
+   ow_bypass_side): round the side with more room.  This side is used
+   when the box is centred, or no sweep result belongs to this obstacle. */
+#define BYPASS_SIDE_DEFAULT	(+1)	/* +1 left, -1 right */
 #define BYPASS_EXTRA_STEP_MM	80	/* extra out-step when scan 2 or the
 					   pass guard says blocked */
 #define BYPASS_MAX_EXTRA	2	/* then FAULT_NO_BYPASS */
@@ -74,13 +77,17 @@ IMPORT ID tid_telemetry;
 					   a sensor on black = line found */
 #define LOST_LINE_OFFSET_MM	100	/* to line search when the line was
 					   not found (only the sign matters) */
-#define AVOID_BEEP_MS		150	/* "avoid left / right" or "depth" applied */
+#define AVOID_BEEP_MS		150	/* "depth" or a "wcal" run applied */
 
 /* Obstacle width sweep (12 Nov, obst_width.h): the car stops at
    D_WIDTH_CM, measures, and goes on.  The sweep takes about 6 s (13 Nov:
    slower, smoother servo moves). */
 #define WIDTH_TIMEOUT_MS	15000	/* no sweep result: carry on anyway */
-#define WM_CAL_MIN_MM		20	/* "wcal": the known box width */
+/* The sweep's bypass side belongs to the obstacle the car stops for
+   next only if that stop comes within this many mm of line following
+   after the sweep (stopping at D_WIDTH_CM, then D_DETECT_CM: ~200 mm). */
+#define WM_SIDE_VALID_MM	400
+#define WM_CAL_MIN_MM		20	/* "wcal <l> <r>": l + r, the box width */
 #define WM_CAL_MAX_MM		300
 #define WM_EDGE_MIN_MM		(-150)	/* "wcal <l> <r>": one edge from the centre */
 #define WM_EDGE_MAX_MM		250	/* line, + = out on its own side */
@@ -102,7 +109,7 @@ IMPORT volatile SUP_STATS sup_stats;
 /* Read-only views of the Supervisor's state, for the snapshot */
 IMPORT void sup_map_get(UB out[26]);	/* the active mapping */
 IMPORT INT  sup_pending_letter(void);	/* 0..25, -1 = none held */
-IMPORT INT  sup_avoid_side(void);	/* +1 left, -1 right (PC setting) */
+IMPORT INT  sup_bypass_side(void);	/* +1 left, -1 right: the running bypass, else the next one */
 IMPORT INT  sup_bypass_depth(void);	/* obstacle depth mm (PC setting) */
 IMPORT INT  sup_obstacle_width_mm(void);	/* last measured obstacle width, 0 = none */
 

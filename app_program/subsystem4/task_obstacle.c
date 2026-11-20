@@ -21,10 +21,6 @@
  *	              every 50 ms; when 2 of the last 3 pings put a point
  *	              closer sideways than param -> EV_OBST_NEAR once, then
  *	              INHIBIT.  Never sets OBST_STOP (it is beside the car).
- *	  RAW         TEMPORARY (20 Nov, "rscan" in Idle): every 1 deg from
- *	              the right end to the left end, RS_PINGS raw readings
- *	              per look to the log, no face / off decision.  Then
- *	              INHIBIT.  Sends no event.
  *
  *	Geometry: angle a from straight ahead, + = left.  A reading of d cm
  *	at a is the point (forward d cos a, left d sin a) from the sensor,
@@ -48,7 +44,6 @@ LOCAL UINT	pass_param;		/* PASS_*: side distance limit, cm */
 LOCAL BOOL	profile_due;
 LOCAL BOOL	side_due;	/* SIDE_PROBE requested, run from the main loop */
 LOCAL INT	side_dir;	/* +1 left, -1 right */
-LOCAL BOOL	raw_due;	/* TEMPORARY (20 Nov): RAW requested, run from the main loop */
 LOCAL UINT	near_hist;	/* pass guard: last 3 pings, bit 0 = newest, 1 = near */
 LOCAL BOOL	near_sent;
 LOCAL BOOL	ahead_sent;	/* EV_OBST_AHEAD sent for this obstacle */
@@ -71,7 +66,7 @@ LOCAL INT servo_now;
 LOCAL UW servo_raw(INT a)
 {
 	INT deg = (INT)SERVO_AHEAD_DEG + SERVO_LEFT_SIGN * a;
-	W   end = (a > 0) ? servo_end_left_us : servo_end_right_us;
+	W   end = (a > 0) ? SERVO_END_LEFT_US : SERVO_END_RIGHT_US;
 	W   adj;
 	if (end > SERVO_END_MAX_US)  end = SERVO_END_MAX_US;
 	if (end < -SERVO_END_MAX_US) end = -SERVO_END_MAX_US;
@@ -118,7 +113,7 @@ LOCAL void set_mode(SCAN_MODE m, UINT param)
 {
 	/* Idle, a turn, a bypass: the next obstacle is a new one */
 	if (m == SCAN_INHIBIT) ahead_sent = FALSE;
-	if (m == mode && m != SCAN_PROFILE && m != SCAN_SIDE_PROBE && m != SCAN_RAW) return;
+	if (m == mode && m != SCAN_PROFILE && m != SCAN_SIDE_PROBE) return;
 	/* Leaving the stopping modes: release OBST_STOP, since only GUARD /
 	   EMERG_ONLY may hold it.  This is what lets a bypass start while the
 	   box is still in front (fault_flags.h). */
@@ -143,9 +138,6 @@ LOCAL void set_mode(SCAN_MODE m, UINT param)
 		/* the servo is moved by the probe itself */
 		side_due = TRUE;
 		side_dir = (param == SIDE_PROBE_LEFT) ? +1 : -1;
-		break;
-	case SCAN_RAW:
-		raw_due = TRUE;		/* the scan moves the servo itself */
 		break;
 	default:
 		servo_to(0);
@@ -413,59 +405,6 @@ LOCAL void side_probe(void)
 	mode = SCAN_INHIBIT;
 }
 
-/* ---- RAW SCAN (20 Nov, TEMPORARY: width sweep diagnosis) ---------------- */
-/* "rscan" in Idle.  Every 1 deg from the right end (-SCAN_SIDE_MAX_DEG) to
-   the left end, always stepping left, so the SG90's deadband leaves every
-   look on the same side of its target (only the first look, at the right
-   end, is reached the other way).  RS_PINGS pings per look, printed as
-   they are, "-" = no echo, then the shortest and the middle one: a weaker
-   echo only ever reads longer (HC-SR04 steps of one 40 kHz cycle,
-   ~4.3 mm).  About 35 s.  A new request stops it (the new mode then
-   moves the servo). */
-LOCAL void raw_scan(void)
-{
-	UW	s[RS_PINGS], r, t;
-	UB	buf[6 * RS_PINGS + 1];
-	INT	a, n, i, j, len;
-
-	raw_due = FALSE;
-	tm_printf((UB*)"[obst] rscan start: %d to %d deg, %d pings each, - = no echo\n",
-		  -SCAN_SIDE_MAX_DEG, SCAN_SIDE_MAX_DEG, RS_PINGS);
-	for (a = -SCAN_SIDE_MAX_DEG; a <= SCAN_SIDE_MAX_DEG; a++) {
-		servo_move(a, WS_RAMP_DEG);
-		tk_dly_tsk(WS_SETTLE_MS);
-		if (interrupted()) {
-			tm_printf((UB*)"[obst] rscan stopped at %d deg: new request\n", a);
-			return;
-		}
-		len = 0;
-		n = 0;
-		for (i = 0; i < RS_PINGS; i++) {
-			if (i > 0) tk_dly_tsk(RS_PING_GAP_MS);
-			r = ping_mm();
-			if (r < WS_NO_ECHO_MM) {
-				len += tm_sprintf(buf + len, (const UB*)" %d", (INT)r);
-				/* insertion sort, shortest first */
-				for (j = n; j > 0 && s[j - 1] > r; j--) s[j] = s[j - 1];
-				s[j] = r;
-				n++;
-			} else {
-				len += tm_sprintf(buf + len, (const UB*)" -");
-			}
-		}
-		if (n > 0) {
-			t = s[n / 2];
-			tm_printf((UB*)"[obst] rscan %d deg:%s mm (min %d, mid %d)\n", a, buf,
-				  (INT)s[0], (INT)t);
-		} else {
-			tm_printf((UB*)"[obst] rscan %d deg:%s mm (no echo)\n", a, buf);
-		}
-	}
-	tm_printf((UB*)"[obst] rscan done\n");
-	servo_move(0, WS_RAMP_DEG);
-	mode = SCAN_INHIBIT;
-}
-
 /* ---- PASS (LK-1.14) ----------------------------------------------------- */
 /* Pass guard: 2 of the last 3 pings closer sideways than pass_param ->
    EV_OBST_NEAR once.  lateral_cm() of the positive SCAN_PASS_DEG is
@@ -491,9 +430,6 @@ LOCAL void pass_step(UW cm)
 EXPORT void obstacle_task(INT stacd, void *exinf)
 {
 	UW	req, next = 0;
-	W	trim_sent = servo_trim_us;
-	W	end_l_sent = servo_end_left_us, end_r_sent = servo_end_right_us;
-	UW	cal_seen = servo_cal_seq;	/* TEMPORARY (19 Nov): "servoend" */
 
 	(void)stacd; (void)exinf;
 	wcet_set_period(WCET_OBSTACLE, PERIOD_OBSTACLE_MS);
@@ -503,45 +439,12 @@ EXPORT void obstacle_task(INT stacd, void *exinf)
 		TMO	wait;
 		W	left;
 
-		if (servo_trim_us != trim_sent) {
-			/* "servo <us>" from the PC: hold the same angle with the
-			   new trim (this task is the servo's only writer) */
-			trim_sent = servo_trim_us;
-			(void)servo_raw(servo_now);
-		}
-		if (servo_end_left_us != end_l_sent || servo_end_right_us != end_r_sent) {
-			/* end calibration changed: same angle, new pulse */
-			end_l_sent = servo_end_left_us;
-			end_r_sent = servo_end_right_us;
-			(void)servo_raw(servo_now);
-		}
-		if (servo_cal_seq != cal_seen) {
-			/* TEMPORARY (19 Nov): "servoend" from the PC (Idle).  Go to
-			   that end (or ahead) and stay there until the next move. */
-			cal_seen = servo_cal_seq;
-			if (mode == SCAN_INHIBIT) {
-				INT a = (servo_cal_side > 0) ? SCAN_SIDE_MAX_DEG :
-					(servo_cal_side < 0) ? -SCAN_SIDE_MAX_DEG : 0;
-				servo_to(a);
-				tm_printf((UB*)"[obst] servo cal: at %d deg (%s), pulse %d us, "
-					  "end left %d us right %d us, trim %d us\n", a,
-					  (a > 0) ? "left end" : (a < 0) ? "right end" : "ahead",
-					  (INT)servo_raw(a), (INT)servo_end_left_us,
-					  (INT)servo_end_right_us, (INT)servo_trim_us);
-			} else {
-				tm_printf((UB*)"[obst] servo cal ignored: scan busy\n");
-			}
-		}
 		if (profile_due) {
 			width_sweep();			/* blocking, ~6 s */
 			continue;
 		}
 		if (side_due) {
 			side_probe();			/* blocking, ~1.7 s */
-			continue;
-		}
-		if (raw_due) {
-			raw_scan();			/* TEMPORARY, blocking, ~35 s */
 			continue;
 		}
 

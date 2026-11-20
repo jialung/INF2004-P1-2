@@ -14,7 +14,8 @@
  *	Behaviour: start / stop / calibrate / fault / clear; line follow;
  *	  hump slow-down; barcode letter -> junction turn; line lost ->
  *	  LineSearch (Ryan's first cut); obstacle -> 50 deg side-step bypass
- *	  on the side chosen from the PC (FR11, 11 Nov).
+ *	  (FR11, 11 Nov) round the side with more room, from the width sweep
+ *	  (20 Nov).
  *	TODO: CH-2.3 Finished trigger.
  */
 
@@ -33,7 +34,6 @@
 #include "../subsystem3/subsystem3.h"	/* imu_cal: compass calibrated? */
 #include "bypass_geom.h"
 #include "obst_width.h"
-#include "../subsystem4/drv_servo.h"	/* servo_trim_us: "servo <us>" */
 
 EXPORT volatile SUP_STATS sup_stats;
 
@@ -68,7 +68,6 @@ typedef enum {
 	BY_LOST_ALIGN
 } BY_STEP;
 LOCAL BY_STEP	byp_step;
-LOCAL INT	byp_pref = BYPASS_SIDE_DEFAULT;	/* PC setting */
 LOCAL W		byp_depth_pref = BG_DEPTH_DEFAULT_MM;	/* PC setting, mm */
 LOCAL INT	byp_side;		/* latched at entry: +1 left, -1 right */
 LOCAL W		byp_depth_mm;		/* latched at entry: obstacle depth */
@@ -92,7 +91,7 @@ LOCAL void byp_step_to(BY_STEP s)
 /* Obstacle width (12 Nov).  Two-stage stop: at D_WIDTH_CM the obstacle task
    sends EV_OBST_AHEAD, the car stops, the width sweep runs, then the car
    follows the line again and stops for the bypass at D_DETECT_CM as before.
-   The width is only measured and shown; the bypass does not use it yet. */
+   The width is shown; the two edges choose the bypass side (wm_side). */
 LOCAL BOOL	wm_active;		/* LineFollow: stopped, waiting for the sweep */
 LOCAL UW	wm_t0;			/* when it began, us */
 /* Idle sweeps from the PC: WM_IDLE_CAL = a calibration run ("wcal"),
@@ -106,6 +105,12 @@ LOCAL OW_CAL	wm_cal = { OW_SL_E4, OW_KL_E4, OW_SR_E4, OW_KR_E4 };	/* in use */
 LOCAL OW_POINT	wm_pts[OW_CAL_MAX_POINTS];	/* "wcal" runs since power-up / "wcal clear" */
 LOCAL UINT	wm_npts;
 LOCAL INT	wm_width_mm;		/* last measured width, 0 = none yet */
+/* Bypass side from the last LineFollow sweep (OW_GO_*), for the next
+   bypass only: used up at the stop, dropped by a new sweep or by any
+   state other than LineFollow, and too old after WM_SIDE_VALID_MM. */
+LOCAL BOOL	wm_side_have;
+LOCAL INT	wm_side;
+LOCAL UH	wm_side_odo;		/* odometer at the sweep result */
 
 /* Pending letter (chain 4.3 steps 5-7) */
 LOCAL BOOL	have_letter;
@@ -252,6 +257,7 @@ LOCAL void enter(SYS_STATE s)
 {
 	SYS_STATE from = st;
 	W	  d1;
+	const char *side_why;
 
 	if (wm_active || wm_idle != WM_IDLE_NONE) {
 		/* any state change ends a width sweep.  The states that send a
@@ -264,6 +270,9 @@ LOCAL void enter(SYS_STATE s)
 		}
 	}
 	if (s != SYS_OBSTACLE_AVOID) byp_step = BY_NONE;	/* STOP, Fault ... end a bypass */
+	/* a junction, hump, line search, STOP ...: the swept box is not the
+	   one the car meets next */
+	if (s != SYS_LINE_FOLLOW && s != SYS_OBSTACLE_AVOID) wm_side_have = FALSE;
 	st = s;
 	sys_state_set(s);
 	sup_stats.transitions++;
@@ -300,7 +309,19 @@ LOCAL void enter(SYS_STATE s)
 	case SYS_OBSTACLE_AVOID:
 		line_ref  = ns;				/* save the line reference */
 		pause_odo = ns.m.odo_mm;		/* pause the discard counter */
-		byp_side  = byp_pref;
+		/* the side with more room, from this obstacle's width sweep */
+		byp_side = BYPASS_SIDE_DEFAULT;
+		if (!wm_side_have) {
+			side_why = "default side: no width sweep for this obstacle";
+		} else if ((UH)(ns.m.odo_mm - wm_side_odo) > WM_SIDE_VALID_MM) {
+			side_why = "default side: the width sweep was too long ago";
+		} else if (wm_side == OW_GO_EITHER) {
+			side_why = "default side: the width sweep gave no preference";
+		} else {
+			side_why = "side from the width sweep";
+			byp_side = wm_side;
+		}
+		wm_side_have = FALSE;			/* used up */
 		byp_depth_mm = byp_depth_pref;
 		byp_steps = 0;
 		byp_extra = 0;
@@ -318,9 +339,9 @@ LOCAL void enter(SYS_STATE s)
 			bypass_fail("stopped too close to the obstacle to turn");
 			break;
 		}
-		tm_printf((UB*)"[sup] bypass %s: stopped at %d cm, step 1 = %d mm, depth %d mm\n",
+		tm_printf((UB*)"[sup] bypass %s: stopped at %d cm, step 1 = %d mm, depth %d mm (%s)\n",
 			  (byp_side > 0) ? "LEFT" : "RIGHT", (INT)byp_stop_cm, (INT)d1,
-			  (INT)byp_depth_mm);
+			  (INT)byp_depth_mm, side_why);
 		out_step(d1);				/* sends SCAN_INHIBIT, then the turn */
 		break;
 	case SYS_LINE_SEARCH:
@@ -737,6 +758,26 @@ LOCAL void width_result(UW word)
 			  (fl != 0U) ? "an edge is out of view" :
 			  "the sweep is narrower than the calibration's zero width");
 	}
+	if ((fl & WM_F_NONE) == 0U) {
+		BOOL	oov_l = (fl & WM_F_OOV_L) != 0U, oov_r = (fl & WM_F_OOV_R) != 0U;
+		int32_t	l, r;
+		INT	side = ow_bypass_side(face, el, er, oov_l, oov_r, &wm_cal, &l, &r);
+		INT	go = (side != OW_GO_EITHER) ? side : BYPASS_SIDE_DEFAULT;
+
+		wm_side_have = TRUE;
+		wm_side = side;
+		wm_side_odo = ns.m.odo_mm;
+		tm_printf((UB*)"[sup] bypass side %s%s: %s (left edge %d mm%s, right edge %d mm%s)\n",
+			  (go > 0) ? "LEFT" : "RIGHT",
+			  (side == OW_GO_EITHER) ? " (default)" : "",
+			  (oov_l && oov_r) ? "both edges out of view" :
+			  oov_l ? "the left edge is out of view" :
+			  oov_r ? "the right edge is out of view" :
+			  (side == OW_GO_RIGHT) ? "the box reaches further left" :
+			  (side == OW_GO_LEFT) ? "the box reaches further right" :
+			  "the box is centred",
+			  (INT)l, oov_l ? "+" : "", (INT)r, oov_r ? "+" : "");
+	}
 	width_resume();
 }
 
@@ -953,6 +994,7 @@ LOCAL void handle(const SUP_EVENT *ev)
 		   then the sweep. */
 		if (st == SYS_LINE_FOLLOW && !wm_active) {
 			wm_active = TRUE;
+			wm_side_have = FALSE;		/* a new obstacle */
 			wm_t0 = now_us();
 			tm_printf((UB*)"[sup] obstacle ahead at %d cm: stopping to measure its width\n",
 				  (INT)ev->a);
@@ -1029,14 +1071,6 @@ LOCAL void handle(const SUP_EVENT *ev)
 			/* exactly what holding MODE for 2 s does */
 			tm_printf((UB*)"[sup] remote MODE (long) in state %d\n", (INT)st);
 			on_button(1, TRUE, TRUE);
-		} else if (ev->a == REMOTE_AVOID_LEFT || ev->a == REMOTE_AVOID_RIGHT) {
-			/* any state; a running bypass keeps its latched side.
-			   The beep says the setting arrived. */
-			byp_pref = (ev->a == REMOTE_AVOID_LEFT) ? +1 : -1;
-			beep(AVOID_BEEP_MS);
-			tm_printf((UB*)"[sup] avoid side set to %s%s\n",
-				  (byp_pref > 0) ? "LEFT" : "RIGHT",
-				  (st == SYS_OBSTACLE_AVOID) ? " (from the next obstacle)" : "");
 		} else if (ev->a == REMOTE_BYPASS_DEPTH) {
 			/* any state; a running bypass keeps its latched depth.
 			   remote_cmd_rx checked the range: clamp anyway. */
@@ -1047,57 +1081,6 @@ LOCAL void handle(const SUP_EVENT *ev)
 			beep(AVOID_BEEP_MS);
 			tm_printf((UB*)"[sup] bypass depth set to %d mm%s\n", (INT)d,
 				  (st == SYS_OBSTACLE_AVOID) ? " (from the next obstacle)" : "");
-		} else if (ev->a == REMOTE_SERVO_TRIM) {
-			/* Idle only (remote_cmd_rx checked; the state may have
-			   changed): the obstacle task moves the servo to the new
-			   straight ahead within 50 ms */
-			if (st == SYS_IDLE) {
-				W t = (W)ev->b;
-
-				if (t > SERVO_TRIM_MAX_US) t = SERVO_TRIM_MAX_US;
-				if (t < -SERVO_TRIM_MAX_US) t = -SERVO_TRIM_MAX_US;
-				servo_trim_us = t;
-				beep(AVOID_BEEP_MS);
-				tm_printf((UB*)"[sup] servo trim set to %d us (about %d deg %s): to keep it, "
-					  "set SERVO_TRIM_US to %d in subsystem4/drv_servo.h\n", (INT)t,
-					  (INT)(((t < 0) ? -t : t) * 9 / 100),
-					  (t >= 0) ? "towards a longer pulse" : "towards a shorter pulse",
-					  (INT)t);
-			} else {
-				tm_printf((UB*)"[sup] servo trim ignored in state %d (only from Idle)\n",
-					  (INT)st);
-			}
-		} else if (ev->a == REMOTE_SERVO_END) {
-			/* TEMPORARY (19 Nov): servo end calibration, Idle only.
-			   The obstacle task moves the servo to that end (or
-			   ahead) and holds it there. */
-			if (st == SYS_IDLE) {
-				UW side = SEND_SIDE(ev->b);
-				W  us = SEND_US(ev->b);
-				if (us > SERVO_END_MAX_US) us = SERVO_END_MAX_US;
-				if (us < -SERVO_END_MAX_US) us = -SERVO_END_MAX_US;
-				if (side == SEND_LEFT) {
-					servo_end_left_us = us;
-					servo_cal_side = +1;
-				} else if (side == SEND_RIGHT) {
-					servo_end_right_us = us;
-					servo_cal_side = -1;
-				} else {
-					servo_cal_side = 0;
-				}
-				servo_cal_seq++;
-				beep(AVOID_BEEP_MS);
-				if (side == SEND_LEFT || side == SEND_RIGHT) {
-					tm_printf((UB*)"[sup] servo %s end set to %d us (%s): to keep it, "
-						  "set SERVO_END_%s_US to %d in subsystem4/drv_servo.h\n",
-						  (side == SEND_LEFT) ? "left" : "right", (INT)us,
-						  (us >= 0) ? "further out" : "less far",
-						  (side == SEND_LEFT) ? "LEFT" : "RIGHT", (INT)us);
-				}
-			} else {
-				tm_printf((UB*)"[sup] servoend ignored in state %d (only from Idle)\n",
-					  (INT)st);
-			}
 		} else if (ev->a == REMOTE_WIDTH_CAL && ev->b == 0U) {
 			/* "wcal clear": any state; the constants in use stay */
 			wm_npts = 0;
@@ -1122,16 +1105,6 @@ LOCAL void handle(const SUP_EVENT *ev)
 				tm_printf((UB*)"[sup] width sweep ignored in state %d%s (only from Idle)\n",
 					  (INT)st, (wm_idle != WM_IDLE_NONE) ? ", one already running" : "");
 			}
-		} else if (ev->a == REMOTE_RAW_SCAN) {
-			/* TEMPORARY (20 Nov): Idle only, not during a width sweep.
-			   The obstacle task prints the readings and sends no event. */
-			if (st == SYS_IDLE && wm_idle == WM_IDLE_NONE) {
-				tm_printf((UB*)"[sup] raw scan: scanning\n");
-				scan(SCAN_RAW, 0);
-			} else {
-				tm_printf((UB*)"[sup] raw scan ignored in state %d%s (only from Idle)\n",
-					  (INT)st, (wm_idle != WM_IDLE_NONE) ? ", a width sweep is running" : "");
-			}
 		}
 		break;
 
@@ -1155,9 +1128,11 @@ EXPORT INT sup_pending_letter(void)
 	return have_letter ? (INT)pend_letter : -1;
 }
 
-EXPORT INT sup_avoid_side(void)
+EXPORT INT sup_bypass_side(void)
 {
-	return byp_pref;
+	if (st == SYS_OBSTACLE_AVOID) return byp_side;
+	if (wm_side_have && wm_side != OW_GO_EITHER) return wm_side;
+	return BYPASS_SIDE_DEFAULT;
 }
 
 EXPORT INT sup_bypass_depth(void)
@@ -1342,10 +1317,6 @@ EXPORT int32_t remote_cmd_rx(const uint8_t *p, uint32_t len, char *reply, uint32
 					 "calibrate only from Idle", now);
 			return -2;
 		}
-	} else if (payload_is(p, len, "avoid left")) {
-		cmd = REMOTE_AVOID_LEFT;		/* any state */
-	} else if (payload_is(p, len, "avoid right")) {
-		cmd = REMOTE_AVOID_RIGHT;		/* any state */
 	} else if ((got = payload_number(p, len, "depth", &value)) != 0) {
 		cmd = REMOTE_BYPASS_DEPTH;		/* any state */
 		if (got < 0 || value < BG_DEPTH_MIN_MM || value > BG_DEPTH_MAX_MM) {
@@ -1353,42 +1324,6 @@ EXPORT int32_t remote_cmd_rx(const uint8_t *p, uint32_t len, char *reply, uint32
 					 "number of mm, %d to %d (example: depth 140)",
 					 (INT)BG_DEPTH_MIN_MM, (INT)BG_DEPTH_MAX_MM);
 			return -3;
-		}
-	} else if (payload_is(p, len, "servoend ahead") ||
-		   (got = payload_num(p, len, "servoend left", &value, TRUE)) != 0 ||
-		   (got = payload_num(p, len, "servoend right", &value, TRUE)) != 0 ||
-		   payload_is(p, len, "servoend")) {
-		/* TEMPORARY (19 Nov): servo end calibration */
-		UW side = payload_is(p, len, "servoend ahead") ? SEND_AHEAD :
-			  (payload_num(p, len, "servoend left", &value, TRUE) != 0) ? SEND_LEFT :
-			  SEND_RIGHT;
-		cmd = REMOTE_SERVO_END;
-		if (payload_is(p, len, "servoend") ||
-		    (side != SEND_AHEAD && (got < 0 || (W)value < -SERVO_END_MAX_US ||
-					    (W)value > SERVO_END_MAX_US))) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"error: servoend needs left <us>, "
-					 "right <us> (%d to %d, + = further out) or ahead",
-					 -(INT)SERVO_END_MAX_US, (INT)SERVO_END_MAX_US);
-			return -3;
-		}
-		if (s != SYS_IDLE) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"refused servoend: car is in %s, "
-					 "servo end calibration only from Idle", now);
-			return -2;
-		}
-		value = SEND_B(side, (side == SEND_AHEAD) ? 0 : (W)value);
-	} else if ((got = payload_num(p, len, "servo", &value, TRUE)) != 0) {
-		cmd = REMOTE_SERVO_TRIM;
-		if (got < 0 || (W)value < -SERVO_TRIM_MAX_US || (W)value > SERVO_TRIM_MAX_US) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"error: servo needs the trim in us, "
-					 "%d to %d (example: servo -40)",
-					 -(INT)SERVO_TRIM_MAX_US, (INT)SERVO_TRIM_MAX_US);
-			return -3;
-		}
-		if (s != SYS_IDLE) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"refused servo: car is in %s, "
-					 "servo trim only from Idle", now);
-			return -2;
 		}
 	} else if (payload_is(p, len, "wcal clear")) {
 		cmd = REMOTE_WIDTH_CAL;			/* value 0 = clear, any state */
@@ -1399,32 +1334,19 @@ EXPORT int32_t remote_cmd_rx(const uint8_t *p, uint32_t len, char *reply, uint32
 					 "edge sweep only from Idle", now);
 			return -2;
 		}
-	} else if (payload_is(p, len, "rscan")) {
-		cmd = REMOTE_RAW_SCAN;			/* TEMPORARY (20 Nov) */
-		if (s != SYS_IDLE) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"refused rscan: car is in %s, "
-					 "raw scan only from Idle", now);
-			return -2;
-		}
 	} else if ((got = payload_two(p, len, "wcal", &el_mm, &er_mm)) != 0) {
-		/* "wcal <width>": a centred box.  "wcal <left> <right>": each
-		   edge's distance from the centre line, + = out on its side. */
+		/* "wcal <left> <right>": each edge's distance from the centre
+		   line, + = out on its side (Edge calibration in the panel) */
 		cmd = REMOTE_WIDTH_CAL;
-		if (got == 1) {
-			if (el_mm < WM_CAL_MIN_MM || el_mm > WM_CAL_MAX_MM) got = -1;
-			er_mm = el_mm / 2;
-			el_mm -= er_mm;
-		} else if (got == 2) {
-			if (el_mm < WM_EDGE_MIN_MM || el_mm > WM_EDGE_MAX_MM ||
-			    er_mm < WM_EDGE_MIN_MM || er_mm > WM_EDGE_MAX_MM ||
-			    el_mm + er_mm < WM_CAL_MIN_MM || el_mm + er_mm > WM_CAL_MAX_MM) got = -1;
-		}
-		if (got < 0) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"error: wcal needs a centred box's width "
-					 "(%d to %d mm, e.g. wcal 150) or each edge from the centre "
-					 "line (%d to %d mm, e.g. wcal 120 30)",
-					 (INT)WM_CAL_MIN_MM, (INT)WM_CAL_MAX_MM,
-					 (INT)WM_EDGE_MIN_MM, (INT)WM_EDGE_MAX_MM);
+		if (got != 2 ||
+		    el_mm < WM_EDGE_MIN_MM || el_mm > WM_EDGE_MAX_MM ||
+		    er_mm < WM_EDGE_MIN_MM || er_mm > WM_EDGE_MAX_MM ||
+		    el_mm + er_mm < WM_CAL_MIN_MM || el_mm + er_mm > WM_CAL_MAX_MM) {
+			(void)tm_sprintf((UB*)reply, (const UB*)"error: wcal needs each edge from the "
+					 "centre line, %d to %d mm, adding up to %d to %d mm "
+					 "(e.g. wcal 120 30)",
+					 (INT)WM_EDGE_MIN_MM, (INT)WM_EDGE_MAX_MM,
+					 (INT)WM_CAL_MIN_MM, (INT)WM_CAL_MAX_MM);
 			return -3;
 		}
 		if (s != SYS_IDLE) {
@@ -1435,36 +1357,17 @@ EXPORT int32_t remote_cmd_rx(const uint8_t *p, uint32_t len, char *reply, uint32
 		value = WCAL_B(el_mm, er_mm);
 	} else {
 		(void)tm_sprintf((UB*)reply, (const UB*)"error: unknown command (use start, "
-				 "stop, mode, calibrate, avoid left, avoid right, depth <mm>, "
-				 "wcal <mm> [<mm>], esweep, rscan, servo <us> or servoend)");
+				 "stop, mode, calibrate, depth <mm>, wcal <left> <right>, "
+				 "wcal clear or esweep)");
 		return -1;
 	}
 	if (sup_post(SRC_TELEMETRY, EV_REMOTE, cmd, value) < E_OK) {
 		(void)tm_sprintf((UB*)reply, (const UB*)"error: supervisor queue full, send again");
 		return -8;
 	}
-	if (cmd == REMOTE_AVOID_LEFT || cmd == REMOTE_AVOID_RIGHT) {
-		(void)tm_sprintf((UB*)reply, (const UB*)"ok avoid %s (from the next obstacle; car is %s)",
-				 (cmd == REMOTE_AVOID_LEFT) ? "left" : "right", now);
-		return 0;
-	}
 	if (cmd == REMOTE_BYPASS_DEPTH) {
 		(void)tm_sprintf((UB*)reply, (const UB*)"ok depth %d mm (from the next obstacle; car is %s)",
 				 (INT)value, now);
-		return 0;
-	}
-	if (cmd == REMOTE_SERVO_TRIM) {
-		(void)tm_sprintf((UB*)reply, (const UB*)"ok servo %d us (car is %s)", (INT)(W)value, now);
-		return 0;
-	}
-	if (cmd == REMOTE_SERVO_END) {		/* TEMPORARY (19 Nov) */
-		if (SEND_SIDE(value) == SEND_AHEAD) {
-			(void)tm_sprintf((UB*)reply, (const UB*)"ok servoend ahead (car is %s)", now);
-		} else {
-			(void)tm_sprintf((UB*)reply, (const UB*)"ok servoend %s %d us (car is %s)",
-					 (SEND_SIDE(value) == SEND_LEFT) ? "left" : "right",
-					 (INT)SEND_US(value), now);
-		}
 		return 0;
 	}
 	if (cmd == REMOTE_WIDTH_CAL && value == 0U) {
@@ -1478,11 +1381,6 @@ EXPORT int32_t remote_cmd_rx(const uint8_t *p, uint32_t len, char *reply, uint32
 	}
 	if (cmd == REMOTE_EDGE_SWEEP) {
 		(void)tm_sprintf((UB*)reply, (const UB*)"ok esweep: sweeping (car is %s)", now);
-		return 0;
-	}
-	if (cmd == REMOTE_RAW_SCAN) {		/* TEMPORARY (20 Nov) */
-		(void)tm_sprintf((UB*)reply, (const UB*)"ok rscan: scanning for about 35 s, "
-				 "readings in the log (car is %s)", now);
 		return 0;
 	}
 	(void)tm_sprintf((UB*)reply, (const UB*)"ok %s (car was %s)%s",
