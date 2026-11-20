@@ -1,0 +1,11 @@
+--- a/config/config.h	2026-10-23 14:17:00.461483468 +0800
++++ b/config/config.h	2026-10-23 14:27:36.108760687 +0800
+@@ -38,7 +38,7 @@
+ 
+ #define	CNF_MAX_TSKPRI		32	/* Task Max priority */
+ 
+-#define CNF_TIMER_PERIOD	10	/* System timer period */
++#define CNF_TIMER_PERIOD	1	/* System timer period */
+ 
+ /* Maximum number of kernel objects (raised for a 5-subsystem team project) */
+ #define CNF_MAX_TSKID		32	/* Task */

@@ -1,132 +1,175 @@
 /*
  *	app_main.c
- *	START HERE.  usermain() below is your program's entry point.
+ *	usermain(): the program's entry point.  Changed only by team agreement.
+ *	Owner: Jia Lung (RTOS base, JL-1.8).  Plan ref: chain 4.1 step 1.
  *
- *	How micro T-Kernel starts your code
- *	-----------------------------------
- *	  reset -> kernel initialises itself -> creates the "initial task"
- *	        -> initial task calls usermain()
+ *	reset -> kernel init -> devinit (starts the CYW43 service task, which
+ *	brings Wi-Fi up WITHOUT blocking us) -> initial task -> usermain()
  *
- *	usermain() runs inside that initial task at priority 1 (the highest).
- *	On a single core nothing you create runs until usermain() blocks, but
- *	on the dual-core build the OTHER core may start a new task at once.
- *	So usermain() works in two phases:
- *	  1. every subsystem creates its kernel objects  (subsystemN_init)
- *	  2. every subsystem starts its tasks             (subsystemN_start)
- *	and then puts the initial task to sleep forever.
+ *	usermain() runs at priority 1 on core 0 and works in phases:
+ *	  0. shared objects: fault flag, message buffers, nav_state mutex,
+ *	     GPIO interrupt dispatcher, WCET probe
+ *	  1. subsystemN_init(): each creates its objects and inits its
+ *	     hardware.  S1 runs first: encoders load first on pio1 (R7).
+ *	  2. subsystemN_start(): each starts its tasks
+ *	Any failure sets FAULT_INIT_FAIL, so the Supervisor starts in Fault
+ *	("driver init fails -> Fault", Design Review section 5).
  *	If usermain() RETURNS, the kernel shuts the whole system down.
- *
- *	The example system: one subsystem per folder, one task each
- *	------------------------------------------------------------
- *	  subsystem1/  LED       blinks GP19, paced by a cyclic handler
- *	  subsystem2/  Producer  makes a "sample" every 300 ms     (core 1)
- *	  subsystem3/  Consumer  collects samples into statistics  (core 0)
- *	  subsystem4/  Monitor   prints reports, pauses/resumes the LED
- *	  subsystem5/  (empty template for the fifth student)
- *
- *	How they talk to each other (the interfaces, see TEAM.md section 5):
- *	  IF-01  S2 -> S3  mailbox mbx_samples      (owned by S3)
- *	  IF-02  S3 -> S2  semaphore sem_slots + memory pool mpf_samples
- *	                   (owned by S2: S3 hands slots and blocks back)
- *	  IF-03  S3 -> S4  message buffer mbf_summary + event flag flg_events
- *	                   (owned by S4)
- *	  IF-04  S4 -> S3  reads app_stats under mutex mtx_stats (owned by S3)
- *	  IF-05  S4 -> S1  suspends/resumes the LED task tid_led (owned by S1)
- *	The subsystem that RECEIVES or OWNS the data creates the object and
- *	publishes its ID in its header; the other side just uses it.
- *
- *	micro T-Kernel APIs used, and where to find them:
- *	  tasks       tk_cre_tsk tk_sta_tsk tk_slp_tsk tk_wup_tsk tk_can_wup
- *	              tk_dly_tsk tk_sus_tsk tk_rsm_tsk tk_chg_pri tk_ref_tsk
- *	              tk_get_tid tk_get_prc                         app_main.c, S1-S4
- *	  semaphore   tk_cre_sem tk_wai_sem tk_sig_sem tk_ref_sem       S2, S3, S4
- *	  mem. pool   tk_cre_mpf tk_get_mpf tk_rel_mpf tk_ref_mpf       S2, S3, S4
- *	  mailbox     tk_cre_mbx tk_snd_mbx tk_rcv_mbx                  S2, S3
- *	  mutex       tk_cre_mtx tk_loc_mtx tk_unl_mtx                  S3, S4
- *	  msg buffer  tk_cre_mbf tk_snd_mbf tk_rcv_mbf                  S3, S4
- *	  event flag  tk_cre_flg tk_set_flg tk_wai_flg                  S3, S4
- *	  cyclic      tk_cre_cyc tk_ref_cyc                             S1
- *	  alarm       tk_cre_alm tk_sta_alm tk_stp_alm                  S4
- *	  time        tk_get_tim                                        S2, S4
- *	  system      tk_ref_ver                                        app_main.c
- *
- *	Output appears on the USB serial port (115200 8N1 in any terminal).
  */
 
 #include "app.h"
+#include "fault_flags.h"
+#include "msg_bus.h"
+#include "nav_state.h"
+#include "gpio_irq.h"
+#include "wcet.h"
+#include "hal.h"
+#include "diag.h"
 
-/*
- * Create and start one task (declared in app.h for every subsystem).
- *   prc = TP_PRC1 (core 0), TP_PRC2 (core 1), or 0 for "any core".
- */
 EXPORT ID app_start_task(FP entry, PRI pri, UW prc, const char *name)
 {
 	T_CTSK	ctsk = {0};
 	ID	tid;
 	ER	er;
 
-	ctsk.task    = entry;		/* function the task runs */
-	ctsk.itskpri = pri;		/* initial priority (1 = highest) */
-	ctsk.stksz   = TASK_STACK_SIZE;	/* kernel allocates the stack */
-	ctsk.tskatr  = TA_HLNG		/* written in a high-level language (C) */
-		     | TA_RNG3;		/* runs at user protection level */
+	ctsk.task    = entry;
+	ctsk.itskpri = pri;
+	ctsk.stksz   = TASK_STACK_SIZE;
+	ctsk.tskatr  = TA_HLNG | TA_RNG3;
 #if TK_SUPPORT_SMP
 	if (prc != 0) {
-		ctsk.tskatr |= TA_ASSPRC;	/* honour the affinity below */
-		ctsk.assprc  = prc;		/* which core(s) it may run on */
+		ctsk.tskatr |= TA_ASSPRC;
+		ctsk.assprc  = prc;
 	}
 #else
-	(void)prc;			/* single-core build: no affinity */
+	(void)prc;
 #endif
-
-	/* tk_cre_tsk: create the task.  It starts in the DORMANT state. */
 	tid = tk_cre_tsk(&ctsk);
 	if (tid < E_OK) {
 		CHECK(tid, name);
 		return tid;
 	}
-
-	/* tk_sta_tsk: DORMANT -> READY.  The int is passed as stacd. */
+	diag_name_task(tid, name);
 	er = tk_sta_tsk(tid, 0);
 	CHECK(er, name);
-	return tid;
+	return (er < E_OK) ? er : tid;
+}
+
+/* Cyclic handler shared by every periodic task: exinf carries the task ID */
+LOCAL void periodic_wakeup(void *exinf)
+{
+	(void)tk_wup_tsk((ID)(UW)exinf);
+}
+
+EXPORT ID app_start_periodic(FP entry, PRI pri, UW prc, RELTIM period_ms,
+			     const char *name, ID *cycid)
+{
+	T_CCYC	ccyc = {0};
+	ID	tid, cid;
+
+	tid = app_start_task(entry, pri, prc, name);
+	if (tid < E_OK) {
+		return tid;
+	}
+	ccyc.exinf  = (void *)(UW)tid;
+	ccyc.cycatr = TA_HLNG | TA_STA;
+	ccyc.cychdr = (FP)periodic_wakeup;
+	ccyc.cyctim = period_ms;
+	ccyc.cycphs = period_ms;
+#if TK_SUPPORT_SMP
+	if (prc != 0) {
+		ccyc.cycatr |= TA_ASSPRC;	/* run the handler on the task's core */
+		ccyc.assprc  = prc;
+	}
+#endif
+	cid = tk_cre_cyc(&ccyc);
+	CHECK(cid, name);
+	if (cycid != NULL) {
+		*cycid = cid;
+	}
+	return (cid < E_OK) ? cid : tid;
+}
+
+LOCAL BOOL init_ok = TRUE;
+
+LOCAL void step(ER er, const char *what)
+{
+	if (er < E_OK) {
+		tm_printf((UB*)"INIT FAILED %s: %d\n", what, (INT)er);
+		init_ok = FALSE;
+	}
 }
 
 EXPORT INT usermain(void)
 {
 	T_RVER	ver;
 
-	/* tk_ref_ver: ask the kernel who it is */
+	diag_pm_boot();		/* keep last run's post-mortem, start a new one */
 	tk_ref_ver(&ver);
-	tm_printf((UB*)"\n=== micro T-Kernel on Raspberry Pi Pico W"
-		  " (spec 0x%04x, product 0x%04x) ===\n", ver.spver, ver.prver);
-#if TK_SUPPORT_SMP
-	tm_printf((UB*)"dual-core (SMP) build, usermain on core %d\n",
-		  tk_get_prc() - 1);	/* tk_get_prc() counts from 1 */
-#else
-	tm_printf((UB*)"single-core build\n");
+	tm_printf((UB*)"\n=== INF2004 P1-2 robot car, micro T-Kernel %04x"
+		  ", tick %d ms ===\n", ver.prver, CNF_TIMER_PERIOD);
+
+	/* Phase 0: shared objects (order matters: flag first) */
+	step(fault_flags_init(), "fault_flags_init");
+	step(msg_bus_init(),     "msg_bus_init");
+	step(nav_state_init(),   "nav_state_init");
+	step(gpio_irq_init(),    "gpio_irq_init");
+	wcet_init();
+
+	/* Phase 1: objects + hardware.  S1 FIRST (encoders need pio1 offset 0) */
+	step(subsystem1_init(), "subsystem1_init (motion)");
+	step(subsystem2_init(), "subsystem2_init (line/barcode)");
+	step(subsystem3_init(), "subsystem3_init (imu)");
+	step(subsystem4_init(), "subsystem4_init (obstacle)");
+	step(subsystem5_init(), "subsystem5_init (supervisor/telemetry)");
+
+	if (!init_ok) {
+		fault_raise(FAULT_INIT_FAIL);	/* Supervisor starts in Fault */
+	}
+
+	/* Phase 2: tasks.  Supervisor last, so it sees every other task. */
+	step(subsystem1_start(), "subsystem1_start");
+	step(subsystem2_start(), "subsystem2_start");
+	step(subsystem3_start(), "subsystem3_start");
+	step(subsystem4_start(), "subsystem4_start");
+	step(subsystem5_start(), "subsystem5_start");
+
+	if (!init_ok) {
+		fault_raise(FAULT_INIT_FAIL);
+	}
+	tm_printf((UB*)"init %s, gpio irq on core %d\n\n",
+		  init_ok ? "OK" : "FAILED -> Fault", (INT)gpio_irq_stats.core);
+	diag_pm_start_here();	/* core 0's watch alarm (core 1: Supervisor) */
+#if !APP_TEST
+	diag_pm_print();
 #endif
 
-	/* Phase 1: every subsystem creates its kernel objects */
-	CHECK(subsystem1_init(), "subsystem1_init");
-	CHECK(subsystem2_init(), "subsystem2_init");
-	CHECK(subsystem3_init(), "subsystem3_init");
-	CHECK(subsystem4_init(), "subsystem4_init");
-	CHECK(subsystem5_init(), "subsystem5_init");
-
-	/* Phase 2: every subsystem starts its tasks */
-	CHECK(subsystem1_start(), "subsystem1_start");
-	CHECK(subsystem2_start(), "subsystem2_start");
-	CHECK(subsystem3_start(), "subsystem3_start");
-	CHECK(subsystem4_start(), "subsystem4_start");
-	CHECK(subsystem5_start(), "subsystem5_start");
-
-	tm_printf((UB*)"all subsystems started\n\n");
-
 #if APP_TEST
-	/* Test build (make TEST=1): run every subsystem's tests in turn,
-	   here in the initial task, while the system is running.  Tests may
-	   call tk_dly_tsk() to let the other tasks work for a while. */
+#if TM_CONSOLE_USB_CDC
+	/* Wait (max 30 s) until a serial monitor has the USB port open, so
+	   the results are not lost while Windows brings the COM port up.
+	   tm_usb_state() == 3: enumerated and the host asserted DTR. */
+	{
+		IMPORT UW tm_usb_state(void);
+		INT i;
+		for (i = 0; i < 300 && tm_usb_state() != 3; i++) {
+			tk_dly_tsk(100);
+		}
+		tk_dly_tsk(500);
+		tm_printf((UB*)"\n[TEST] test task on core %d (SMP %d)\n",
+			  (INT)hal_core_id(), (INT)TK_SUPPORT_SMP);
+		tm_printf((UB*)"\n[TEST] serial monitor %s after %d.%d s; init %s\n",
+			  tm_usb_state() == 3 ? "connected" : "NOT seen, starting anyway",
+			  i / 10, i % 10, init_ok ? "OK" : "FAILED (scroll up for which step)");
+	}
+#endif
+	diag_pm_print();
+	diag_name_task(tk_get_tid(), "usermain/test");
+	diag_task_dump("task states at test start");
+	diag_kernel_line();
+	wcet_reset();		/* boot (CYW43 firmware load) is not part of the test */
+	gpio_irq_stats.max_us = 0;
+	tk_dly_tsk(100);
 	tm_printf((UB*)"[TEST] === test run start ===\n");
 	subsystem1_test();
 	subsystem2_test();
@@ -134,9 +177,17 @@ EXPORT INT usermain(void)
 	subsystem4_test();
 	subsystem5_test();
 	tm_printf((UB*)"[TEST] === test run end ===\n");
+	/* 30 s of status, once a second, from the highest-priority task */
+	{
+		INT i;
+		for (i = 0; i < 30; i++) {
+			tk_dly_tsk(1000);
+			tm_printf((UB*)"[TEST] +%d s after the tests\n", i + 1);
+			diag_kernel_line();
+		}
+	}
 #endif
 
-	/* Sleep forever.  Returning from usermain() would shut down. */
 	tk_slp_tsk(TMO_FEVR);
 	return 0;
 }

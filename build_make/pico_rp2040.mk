@@ -412,7 +412,8 @@ LWIP_CORE_SRCS := core/init.c core/def.c core/dns.c core/inet_chksum.c \
                    netif/ethernet.c
 LWIP_CORE_OBJS := $(addprefix ./mtkernel_3/lwip/,$(LWIP_CORE_SRCS:.c=.o))
 
-LWIP_PORT_OBJS := ./mtkernel_3/lib/liblwip/sysdepend/pico_rp2040/sys_arch.o
+LWIP_PORT_OBJS := ./mtkernel_3/lib/liblwip/sysdepend/pico_rp2040/sys_arch.o \
+                  ./mtkernel_3/lib/liblwip/sysdepend/pico_rp2040/telnet_utk.o
 
 CYW43_LWIP_OBJS := ./mtkernel_3/cyw43/cyw43_lwip.o
 

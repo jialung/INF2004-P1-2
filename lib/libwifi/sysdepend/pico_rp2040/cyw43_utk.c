@@ -19,6 +19,7 @@
 #if TM_MQTT
 #include "mqtt_utk.h"
 #endif
+#include "telnet_utk.h"
 #endif
 
 #include <string.h>
@@ -333,6 +334,11 @@ void cyw43_utk_task(int32_t stacd, void *exinf)
         cyw43_thread_exit();
 #if TM_NET_LWIP
         sys_check_timeouts();
+        /* console over Wi-Fi (Telnet, port 23) */
+        if(radio_status.link_status == CYW43_LINK_UP) {
+            telnet_utk_start();
+        }
+        telnet_utk_poll();
 #if TM_MQTT
         /* mqtt_utk_start() is idempotent (see its own connecting/is_connected
          * guard), so calling it on every poll iteration once the link is up

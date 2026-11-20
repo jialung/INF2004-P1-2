@@ -1,35 +1,41 @@
 /*
  *	subsystem1.c
- *	Subsystem 1 -- LED heartbeat: creates its objects and starts its task.
- *
- *	APIs shown: tk_cre_cyc, tk_sta_cyc
+ *	Motion Control: objects, hardware init, task start.   Owner: Jia Lung
  */
 
 #include "subsystem1.h"
+#include "drv_motor.h"
+#include "encoders.h"
 
-EXPORT ID	tid_led;	/* IF-05, see subsystem1.h */
-EXPORT ID	cyc_led;
+EXPORT ID   tid_motion;
+EXPORT BOOL motion_hw_ok;
 
 EXPORT ER subsystem1_init(void)
 {
-	T_CCYC	ccyc = {0};
+	ER r;
 
-	/* Cyclic handler: once started, the kernel calls led_cyclic_handler
-	   every S1_TICK_MS.  Without TA_STA it is created stopped; it is
-	   started in subsystem1_start(), once the task it wakes exists. */
-	ccyc.cycatr = TA_HLNG;
-	ccyc.cychdr = (FP)led_cyclic_handler;
-	ccyc.cyctim = S1_TICK_MS;	/* period, ms */
-	ccyc.cycphs = S1_TICK_MS;	/* delay before the first call, ms */
-	cyc_led = tk_cre_cyc(&ccyc);
-	return (cyc_led < E_OK) ? cyc_led : E_OK;
+	/* Motors first, so they are held stopped from here on */
+	if (drv_motor_init() != 0) {
+		LOG("motion", "motor PWM init failed\n");
+		return E_SYS;
+	}
+
+	/* Right encoder first on pio1 (offset 0, R7); left encoder on
+	   GPIO interrupts (GP7 / GP28 are not consecutive) */
+	r = encoders_init();
+	LOG("motion", "encoders: %s (right: PIO %d instr. at offset 0 on pio1; "
+	    "left: interrupts on GP%d/GP%d)\n", r == E_OK ? "OK" : "FAILED",
+	    (INT)encoders_pio_len(), PIN_ENC_L_A, PIN_ENC_L_B);
+	if (r != E_OK) {
+		return E_SYS;		/* -> FAULT_INIT_FAIL in usermain */
+	}
+	motion_hw_ok = TRUE;
+	return E_OK;
 }
 
 EXPORT ER subsystem1_start(void)
 {
-	tid_led = app_start_task(led_task, S1_PRI_LED, 0, "led_task");
-	if (tid_led < E_OK) {
-		return tid_led;
-	}
-	return tk_sta_cyc(cyc_led);	/* start the cyclic handler now */
+	tid_motion = app_start_periodic(motion_task, PRI_MOTION, CORE_MOTION,
+					PERIOD_MOTION_MS, "motion", NULL);
+	return (tid_motion < E_OK) ? tid_motion : E_OK;
 }

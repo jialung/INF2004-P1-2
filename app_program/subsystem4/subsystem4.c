@@ -1,52 +1,32 @@
 /*
  *	subsystem4.c
- *	Subsystem 4 -- Monitor: creates its objects and starts its task.
- *
- *	APIs shown: tk_cre_flg, tk_cre_mbf, tk_cre_alm
+ *	Obstacle Scan: hardware init and task start.           Owner: Lui Khee
  */
 
 #include "subsystem4.h"
+#include "drv_servo.h"
 
-EXPORT ID	mbf_summary;	/* IF-03 */
-EXPORT ID	flg_events;	/* IF-03 */
-EXPORT ID	alm_monitor;
+EXPORT ID tid_obstacle;
 
 EXPORT ER subsystem4_init(void)
 {
-	T_CFLG	cflg = {0};
-	T_CMBF	cmbf = {0};
-	T_CALM	calm = {0};
+	ER er;
 
-	/* Event flag: a 32-bit pattern of bits.  Tasks wait for a bit (or a
-	   combination of bits) to be set. */
-	cflg.flgatr  = TA_TFIFO | TA_WMUL;	/* allow several waiters */
-	cflg.iflgptn = 0;			/* all bits clear to begin with */
-	flg_events = tk_cre_flg(&cflg);
-	if (flg_events < E_OK) {
-		return flg_events;
+	if (drv_servo_init() != 0) {
+		return E_SYS;
 	}
-
-	/* Message buffer: COPIES variable-length data into a kernel ring
-	   buffer.  Here it carries short text lines from subsystem 3. */
-	cmbf.mbfatr = TA_TFIFO;
-	cmbf.bufsz  = 4 * S4_SUMMARY_MAX;	/* total buffer size, bytes */
-	cmbf.maxmsz = S4_SUMMARY_MAX;		/* largest single message */
-	mbf_summary = tk_cre_mbf(&cmbf);
-	if (mbf_summary < E_OK) {
-		return mbf_summary;
+	er = us_init();			/* registers ECHO with gpio_irq.c (R5) */
+	if (er < E_OK) {
+		LOG("obstacle", "ECHO interrupt registration failed: %d\n", (INT)er);
 	}
-
-	/* Alarm handler: called ONCE, a given time after tk_sta_alm().
-	   The monitor task re-arms it each time round its loop. */
-	calm.almatr = TA_HLNG;
-	calm.almhdr = (FP)monitor_alarm_handler;
-	alm_monitor = tk_cre_alm(&calm);
-	return (alm_monitor < E_OK) ? alm_monitor : E_OK;
+	return er;
 }
 
 EXPORT ER subsystem4_start(void)
 {
-	/* No affinity: the scheduler may run it on either core */
-	ID tid = app_start_task(monitor_task, S4_PRI_MONITOR, 0, "monitor_task");
-	return (tid < E_OK) ? tid : E_OK;
+	/* Not a cyclic task: it waits on mbf_scan_req with a 50 ms timeout,
+	   so a mode change (e.g. leave GUARD) is handled at once. */
+	tid_obstacle = app_start_task(obstacle_task, PRI_OBSTACLE, CORE_OBSTACLE,
+				      "obstacle");
+	return (tid_obstacle < E_OK) ? tid_obstacle : E_OK;
 }

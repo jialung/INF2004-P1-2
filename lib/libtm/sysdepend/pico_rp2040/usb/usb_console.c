@@ -265,12 +265,132 @@ EXPORT ER tm_usb_console_start(void)
  * Append to the ring.  This may spin on the short SMP ring lock, but never
  * waits on the host and never performs a scheduler wait.
  */
+#if defined(TM_NET_LWIP) && TM_NET_LWIP
+/*
+ * Network copy of the console (Telnet, lib/liblwip/.../telnet_utk.c).
+ * Every byte put on the USB ring is also put here while a Telnet client
+ * is connected (net_on).  Same lock as the USB ring.  Full = drop and
+ * count: the console never waits for the network either.
+ */
+#define NET_TX_SIZE		4096U
+#define NET_TX_MASK		(NET_TX_SIZE - 1U)
+LOCAL UB		net_buffer[NET_TX_SIZE];
+LOCAL volatile UW	net_head, net_tail;
+LOCAL volatile UB	net_on;
+EXPORT volatile UW	tm_net_dropped;
+
+/* Telnet client connected (1) / gone (0).  Connecting starts empty. */
+EXPORT void tm_net_console_enable(INT on)
+{
+	UINT	intsts;
+
+	tx_lock_enter(&intsts);
+	net_tail = net_head;
+	net_on = (on != 0);
+	tx_lock_leave(intsts);
+}
+
+/* Take up to max bytes; returns how many */
+EXPORT INT tm_net_console_get(UB *out, INT max)
+{
+	UINT	intsts;
+	INT	n = 0;
+
+	tx_lock_enter(&intsts);
+	while(n < max && net_tail != net_head) {
+		out[n++] = net_buffer[net_tail];
+		net_tail = (net_tail + 1U) & NET_TX_MASK;
+	}
+	tx_lock_leave(intsts);
+	return n;
+}
+
+LOCAL void net_put(const UB *buf, INT size)	/* lock held */
+{
+	UW next;
+
+	if(!net_on) return;
+	while(size-- > 0) {
+		next = (net_head + 1U) & NET_TX_MASK;
+		if(next == net_tail) {
+			tm_net_dropped++;
+			buf++;
+			continue;
+		}
+		net_buffer[net_head] = *buf++;
+		net_head = next;
+	}
+}
+
+#if defined(TM_MQTT) && TM_MQTT
+/*
+ * MQTT copy of the console (topic <client id>/log, lib/liblwip/.../
+ * mqtt_utk.c).  Its own ring so a slow Telnet viewer and the MQTT
+ * publisher cannot make each other drop text.  On while the MQTT client
+ * is connected.  Same lock and same full = drop rule.
+ */
+#define LOG_TX_SIZE		4096U
+#define LOG_TX_MASK		(LOG_TX_SIZE - 1U)
+LOCAL UB		log_buffer[LOG_TX_SIZE];
+LOCAL volatile UW	log_head, log_tail;
+LOCAL volatile UB	log_on;
+EXPORT volatile UW	tm_log_dropped;
+
+EXPORT void tm_mqtt_log_enable(INT on)
+{
+	UINT	intsts;
+
+	tx_lock_enter(&intsts);
+	log_tail = log_head;
+	log_on = (on != 0);
+	tx_lock_leave(intsts);
+}
+
+EXPORT INT tm_mqtt_log_get(UB *out, INT max)
+{
+	UINT	intsts;
+	INT	n = 0;
+
+	tx_lock_enter(&intsts);
+	while(n < max && log_tail != log_head) {
+		out[n++] = log_buffer[log_tail];
+		log_tail = (log_tail + 1U) & LOG_TX_MASK;
+	}
+	tx_lock_leave(intsts);
+	return n;
+}
+
+LOCAL void log_put(const UB *buf, INT size)	/* lock held */
+{
+	UW next;
+
+	if(!log_on) return;
+	while(size-- > 0) {
+		next = (log_head + 1U) & LOG_TX_MASK;
+		if(next == log_tail) {
+			tm_log_dropped++;
+			buf++;
+			continue;
+		}
+		log_buffer[log_head] = *buf++;
+		log_head = next;
+	}
+}
+#endif /* TM_MQTT */
+#endif
+
 EXPORT void tm_usb_console_put(const UB *buf, INT size)
 {
 	UW	next;
 	UINT	intsts;
 
 	tx_lock_enter(&intsts);
+#if defined(TM_NET_LWIP) && TM_NET_LWIP
+	net_put(buf, size);
+#if defined(TM_MQTT) && TM_MQTT
+	log_put(buf, size);
+#endif
+#endif
 	while(size-- > 0) {
 		next = (tx_head + 1U) & USB_TX_MASK;
 		if(next == tx_tail) {		/* full: drop, and count it */

@@ -1,0 +1,1 @@
+#define CNF_TIMER_PERIOD 1

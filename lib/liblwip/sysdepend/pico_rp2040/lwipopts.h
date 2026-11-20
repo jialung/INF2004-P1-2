@@ -55,6 +55,11 @@
  * room to spare; each slot is only a few bytes. */
 #define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 4)
 
+/* MQTT output buffer: the default 256 B cannot hold a snapshot reply
+ * (~450 B JSON) plus queued telemetry frames and events. */
+#define MQTT_OUTPUT_RINGBUF_SIZE    2048
+#define MQTT_REQ_MAX_IN_FLIGHT      8
+
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
 #define LWIP_ICMP                   1

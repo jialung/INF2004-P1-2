@@ -1,10 +1,12 @@
 /*
  *	subsystem1.h
- *	Subsystem 1 -- LED heartbeat.  Student ID: <student ID>.
+ *	Subsystem 1 -- Motion Control.  Owner: Jia Lung (Real-Time Taskmaster).
+ *	Public interface only.  Plan section 6.
  *
- *	This header is subsystem 1's PUBLIC interface: only what other
- *	subsystems are allowed to use.  Everything else stays LOCAL in the .c
- *	files.  Other subsystems include it as "../subsystem1/subsystem1.h".
+ *	Inputs   mbf_motion_cmd (MOTION_CMD, msg_types.h), line error word,
+ *	         fault flag (every cycle), nav_state heading (turns, D1)
+ *	Outputs  motor PWM (sole writer), nav_state motion half,
+ *	         EV_MOTION_DONE, MOTOR_STALL / ENC_FAULT bits
  */
 
 #ifndef SUBSYSTEM1_H
@@ -12,16 +14,30 @@
 
 #include "../app.h"
 
-#define S1_PRI_LED	12		/* priority band 12-13 (TEAM.md) */
-#define S1_LED_PIN	19		/* GP19: LED + 330R resistor to GND */
-#define S1_TICK_MS	250		/* LED toggles every tick */
+IMPORT ID tid_motion;
 
-/* IF-05: the LED task's ID, so subsystem 4 may pause/resume it */
-IMPORT ID	tid_led;
+/* For the fault-cut test (JL-1.33): when Motion Control first saw a stop
+   bit, and the time it was raised by the test. */
+IMPORT volatile UW motion_cut_t_us;
 
-/* Private to subsystem 1, shared between its own .c files */
-IMPORT ID	cyc_led;
-IMPORT void	led_task(INT stacd, void *exinf);
-IMPORT void	led_cyclic_handler(void *exinf);
+/* Motion Control's own state, in nav_state.m.motion_state (JL-1.16) */
+typedef enum {
+	MS_IDLE = 0,	/* braked, no command */
+	MS_FOLLOW,	/* line following */
+	MS_DRIVE,	/* fixed distance */
+	MS_TURN,	/* pivot */
+	MS_CUT,		/* stopped by the fault flag */
+	MS_STATE_COUNT
+} MOTION_STATE;
+
+/* Encoder direction: +1 or -1 so that driving FORWARD counts UP on both
+   wheels.  Set from test S1-U05 (prints the raw counts).  JL-1.3
+   Bench 23 Oct: forward 400 ms gave raw left -962, raw right +960. */
+#define ENC_SIGN_L		(-1)
+#define ENC_SIGN_R		(+1)
+
+/* Private to subsystem 1 */
+IMPORT void motion_task(INT stacd, void *exinf);
+IMPORT BOOL motion_hw_ok;
 
 #endif /* SUBSYSTEM1_H */

@@ -7,6 +7,117 @@ You need a **Raspberry Pi Pico W**, a USB cable, and a computer running
 macOS, Linux, or Windows with **WSL (Ubuntu)**. On Windows, run every
 command below inside the WSL Ubuntu terminal.
 
+> **INF2004 P1-2 robot car.** This repo is the course template with our car
+> code in `app_program/`. For the day-to-day build on the team PC (Windows
+> PowerShell, MSYS2 `make`, no WSL) see
+> [section 0](#0-robot-car-build-windows-powershell) right below. The rest of
+> this README is the template's own guide (toolchain setup, build options,
+> writing code) and still applies. See also `docs/HANDOFF.md` (state of the
+> car, wiring, placeholders) and `TEAM.md` (owners, pins, interfaces).
+
+---
+
+## 0. Robot car build (Windows PowerShell)
+
+Everything here is run from the project folder on the team PC. No WSL: the
+`make` comes from MSYS2 and the compiler from the Pico extension's toolchain.
+
+**0.1 Open a terminal and set the two paths** (once per terminal window; a
+new window needs them again)
+
+```powershell
+cd "C:\Users\luikh\Downloads\Telegram Desktop\INF2004v2\INF2004\build_make"
+$env:PATH = "C:\Users\luikh\.pico-sdk\toolchain\15_2_Rel1\bin;C:\msys64\usr\bin;" + $env:PATH
+$env:PICO_SDK_PATH = "C:/Users/luikh/.pico-sdk/sdk/2.3.1"
+```
+
+Both paths are per-PC: change them to match yours. The first must contain
+`arm-none-eabi-gcc.exe` and `make.exe`, the second the Pico SDK.
+
+**0.2 Build the image we fly**
+
+```powershell
+make -j8 NET=lwip MQTT=1        # Wi-Fi + MQTT + Telnet: the demo image
+```
+
+Other images, same folder:
+
+```powershell
+make -j8                        # no Wi-Fi networking, USB console only
+make -j8 TEST=1                 # runs the subsystem self-tests at power-up
+make -j8 SMP=0 NET=lwip MQTT=1  # single core (debugging only)
+```
+
+A good build ends with a line containing `elf2uf2 ... .uf2`. Anything with
+`error:` or `*** ... Stop.` is a failure; the `.uf2` then still holds the
+*previous* build, so always check this line before flashing.
+
+**0.3 Flash**
+
+1. Hold **BOOTSEL**, plug in the USB cable, release. The **RPI-RP2** drive
+   appears.
+2. Copy `build_make\mtk3pico_smp1_usb_cdc_wifi_lwip_mqtt.uf2` onto it
+   (the plain image is `..._wifi.uf2`, the test image `..._test.uf2`).
+
+Flash the file from **`build_make\`**. The images in `firmware\` are from
+23 Oct and predate most of the car code.
+
+**0.4 After any code change**
+
+Save the file, run the same `make` line again, and copy the new `.uf2`.
+Editing a header is enough: `make` recompiles everything that includes it,
+so `make clean` is not needed. **The car only runs what you flash.**
+
+**0.5 Wi-Fi, MQTT and the control window**
+
+Needed for the `MQTT=1` image. Full detail in `docs/HANDOFF.md` section 8.
+
+1. The SSID, password and broker IP are compiled in from
+   `config/wifi_secrets.h` (git-ignored; copy
+   `config/wifi_secrets.example.h`). The broker IP must be **this PC's IPv4
+   address on the car's hotspot** (`ipconfig`). If it changed, edit the file
+   and rebuild: the address is inside the firmware.
+2. Start the broker and leave the window open:
+   ```powershell
+   & "C:\Program Files\mosquitto\mosquitto.exe" -c "<project>\tools\mqtt\mosquitto_robot.conf" -v
+   ```
+   It must print `Opening ipv4 listen socket on port 1883`. Double-clicking
+   `mosquitto.exe` listens on localhost only and the car cannot connect.
+3. Open the control panel: double-click `tools\mqtt\web_panel.bat` (or
+   `python tools\mqtt\web_panel.py`). It opens http://127.0.0.1:8765 in the
+   browser; keep its console window open while you use it. START / STOP
+   (Esc), calibrate, the barcode mapping, obstacle bypass, width and edge
+   calibration, the live log and the barcode / hump / speed readouts are
+   all there. Phones and laptops on the car's network can open it too, at
+   `http://<broker IP>:8765` (the console window prints the address);
+   anyone there can drive the car. Other networks the PC is on are refused.
+   Options: `--broker IP[:port]`, `--port N`, `--no-browser`,
+   `--local-only` (this PC only), `--allow 192.168.1.0/24` (a different
+   network; repeatable), `--allow any` (every network).
+   It needs only Python 3 and the Mosquitto tools. It is a PC program:
+   changing it needs no rebuild.
+
+**0.6 Host unit tests** (no Pico needed, run from the project root)
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;" + $env:PATH
+make -C tests/host -f host_tests.mk CC=gcc
+```
+
+Last result: `host tests: 606 passed, 0 failed`. Run these before pushing:
+they cover the message formats, the barcode decoder, the mapping parser and
+the telemetry frame on the laptop, with no hardware.
+
+**0.7 If the build fails**
+
+| Message | Fix |
+|---|---|
+| `arm-none-eabi-gcc: command not found` | the toolchain path in 0.1 is wrong |
+| `PICO_SDK_PATH is not set` / SDK files not found | the SDK path in 0.1 is wrong |
+| `No rule to make target 'C:/Users/<someone-else>/...'` | stale dependency files from another PC: delete the matching `.d` and `.o` under `build_make\mtkernel_3\`, or run `make clean`, then build again |
+| `CRASH_REPORT=1` or `CONSOLE=uart` refused | on purpose: GP0/GP1 are the right encoder (`TEAM.md` section 2) |
+| `wifi_secrets.h: No such file` | copy `config/wifi_secrets.example.h` to `config/wifi_secrets.h` and fill it in |
+
 ---
 
 ## 1. Set up the Pico C SDK and the compiler

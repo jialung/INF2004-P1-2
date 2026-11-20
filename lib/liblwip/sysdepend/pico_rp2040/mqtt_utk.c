@@ -26,6 +26,75 @@
 #define MQTT_UTK_KEEPALIVE_S    60
 #define MQTT_UTK_RETRY_MS       3000
 
+/* Robot telemetry (CH-1.11, patch P5 done as an lwIP timer instead of a
+ * hook in cyw43_utk.c's loop -- same task, so the R-5 rule still holds).
+ * task_telemetry.c (kernel side) writes the newest 14-byte frame into
+ * telem_outbox every 500 ms under a sequence lock: telem_outbox_seq is odd
+ * while it is writing and even when the frame is complete.  The frame
+ * format is in app_program/subsystem5/telem_frame.h (plain stdint, safe
+ * here).  Published binary, QoS 0, not retained. */
+#include "../../../../app_program/subsystem5/telem_frame.h"
+
+#ifndef MQTT_TOPIC_TELEM
+#define MQTT_TOPIC_TELEM        MQTT_CLIENT_ID "/telem"
+#endif
+#define MQTT_UTK_OUTBOX_MS      100
+
+extern volatile uint8_t  telem_outbox[TF_LEN];
+extern volatile uint32_t telem_outbox_seq;
+
+/* Barcode letter -> movement mapping from the PC (FR4, CH-1.14).  The text
+ * payload is parsed by map_rx_payload() (app_program/subsystem5, plain
+ * stdint interface) which hands the table to the Supervisor.  The result
+ * is published on MQTT_TOPIC_MAP "/ack" so the sender can see it landed.
+ * Subscribed with QoS 1; a retained message is picked up on (re)connect. */
+#include "../../../../app_program/subsystem5/map_parse.h"
+
+#ifndef MQTT_TOPIC_MAP
+#define MQTT_TOPIC_MAP          MQTT_CLIENT_ID "/map"
+#endif
+#define MQTT_TOPIC_MAP_ACK      MQTT_TOPIC_MAP "/ack"
+
+/* Events (FR12 / FR14 map) and snapshot request / reply (FR13) */
+#ifndef MQTT_TOPIC_EVENT
+#define MQTT_TOPIC_EVENT        MQTT_CLIENT_ID "/event"
+#endif
+#ifndef MQTT_TOPIC_SNAPSHOT
+#define MQTT_TOPIC_SNAPSHOT     MQTT_CLIENT_ID "/snapshot"
+#endif
+#define MQTT_TOPIC_SNAP_REPLY   MQTT_TOPIC_SNAPSHOT "/reply"
+
+/* START / STOP from the PC (app_program/subsystem5/remote_cmd.h).  The
+ * answer goes to "/ack".  The PC must NOT retain these: a retained
+ * "start" would restart the car on every reconnect. */
+#include "../../../../app_program/subsystem5/remote_cmd.h"
+
+#ifndef MQTT_TOPIC_CMD
+#define MQTT_TOPIC_CMD          MQTT_CLIENT_ID "/cmd"
+#endif
+#define MQTT_TOPIC_CMD_ACK      MQTT_TOPIC_CMD "/ack"
+
+/* Console log: a copy of everything printed on the USB console, filled
+ * by usb_console.c while the client is connected.  Published as text
+ * chunks of whole lines, QoS 0, after telemetry and events so a busy log
+ * never delays them.  Text that does not fit is dropped, never waited
+ * for (same rule as USB and Telnet). */
+#ifndef MQTT_TOPIC_LOG
+#define MQTT_TOPIC_LOG          MQTT_CLIENT_ID "/log"
+#endif
+#define MQTT_UTK_LOG_CHUNK      400	/* bytes per publish */
+#define MQTT_UTK_LOG_PER_POLL   2	/* publishes per 100 ms poll */
+#define MQTT_UTK_LOG_HOLD       5	/* polls a partial line may wait */
+
+extern void tm_mqtt_log_enable(int on);
+extern int  tm_mqtt_log_get(unsigned char *out, int max);
+
+static int topic_is(const char *a, const char *b)
+{
+	while(*a != '\0' && *a == *b) { a++; b++; }
+	return *a == *b;
+}
+
 /* Inbound message staging. A publish arrives as one topic callback followed by
  * one or more data callbacks, so the topic has to be kept until the fragment
  * carrying MQTT_DATA_FLAG_LAST shows up. Both buffers are sized well past the
@@ -43,7 +112,12 @@ static UB		rx_data[MQTT_UTK_RX_DATA_MAX];
 static u16_t		rx_len;
 static u8_t		rx_truncated;
 
+static UB		log_pend[MQTT_UTK_LOG_CHUNK];
+static u16_t		log_n;
+static u8_t		log_age;
+
 static void heartbeat_timeout(void *arg);
+static void publish_done_cb(void *arg, err_t result);
 
 /* mqtt.c NUL-terminates the topic before handing it over, but it is only
  * valid for the duration of this call -- copy it out. */
@@ -84,14 +158,59 @@ static void incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t flags)
 		rx_data[rx_len] = '\0';
 		tm_printf((UB*)"mqtt: RX [%s] \"%s\"%s\n", rx_topic, rx_data,
 			  rx_truncated? " (truncated)": "");
+
+		if(topic_is(rx_topic, MQTT_TOPIC_SNAPSHOT)) {
+			static char	snap[768];
+			uint32_t	n = telem_snapshot(snap, sizeof(snap));
+
+			if(n > 0 && mqtt_client_is_connected(client)) {
+				(void)mqtt_publish(client, MQTT_TOPIC_SNAP_REPLY, snap, (u16_t)n,
+						   0 /* qos */, 0 /* retain */,
+						   publish_done_cb, NULL);
+			}
+		}
+
+		if(topic_is(rx_topic, MQTT_TOPIC_MAP)) {
+			static char	reply[200];
+			u16_t		n = 0;
+
+			if(rx_truncated) {
+				(void)tm_sprintf((UB*)reply, (const UB*)"error: mapping longer than %d bytes",
+						 MQTT_UTK_RX_DATA_MAX - 1);
+			} else {
+				(void)map_rx_payload(rx_data, rx_len, reply, sizeof(reply));
+			}
+			while(n < sizeof(reply) - 1 && reply[n] != '\0') n++;
+			tm_printf((UB*)"mqtt: map %s\n", reply);
+			if(mqtt_client_is_connected(client)) {
+				(void)mqtt_publish(client, MQTT_TOPIC_MAP_ACK, reply, n,
+						   1 /* qos */, 0 /* retain */,
+						   publish_done_cb, NULL);
+			}
+		}
+
+		if(topic_is(rx_topic, MQTT_TOPIC_CMD)) {
+			static char	reply[160];
+			u16_t		n = 0;
+
+			reply[0] = '\0';
+			(void)remote_cmd_rx(rx_data, rx_len, reply, sizeof(reply));
+			while(n < sizeof(reply) - 1 && reply[n] != '\0') n++;
+			tm_printf((UB*)"mqtt: cmd %s\n", reply);
+			if(mqtt_client_is_connected(client)) {
+				(void)mqtt_publish(client, MQTT_TOPIC_CMD_ACK, reply, n,
+						   1 /* qos */, 0 /* retain */,
+						   publish_done_cb, NULL);
+			}
+		}
 	}
 }
 
 static void subscribe_done_cb(void *arg, err_t result)
 {
-	(void)arg;
 	if(result == ERR_OK) {
-		tm_printf((UB*)"mqtt: subscribed to " MQTT_TOPIC "\n");
+		tm_printf((UB*)"mqtt: subscribed to %s\n",
+			  (arg != NULL)? (const char*)arg: MQTT_TOPIC);
 	} else {
 		tm_printf((UB*)"mqtt: subscribe failed, err=%d\n", (int)result);
 	}
@@ -125,6 +244,96 @@ static void heartbeat_timeout(void *arg)
 	 * only starts this chain once, on the transition into MQTT_CONNECT_
 	 * ACCEPTED, so there is exactly one heartbeat chain alive at a time. */
 	sys_timeout(MQTT_UTK_HEARTBEAT_MS, heartbeat_timeout, NULL);
+}
+
+/* Console log -> MQTT_TOPIC_LOG.  Text stays in log_pend until a publish
+ * accepts it, so a full output buffer delays it instead of losing it;
+ * only the console ring itself drops (when it fills). */
+static void log_poll(void)
+{
+	int	k;
+
+	for(k = 0; k < MQTT_UTK_LOG_PER_POLL && mqtt_client_is_connected(client); k++) {
+		u16_t	cut = 0, i;
+
+		log_n = (u16_t)(log_n + tm_mqtt_log_get(log_pend + log_n,
+							(int)(MQTT_UTK_LOG_CHUNK - log_n)));
+		if(log_n == 0) {
+			log_age = 0;
+			return;
+		}
+		/* send whole lines; a partial line waits a little for its end */
+		for(i = log_n; i > 0; i--) {
+			if(log_pend[i - 1] == '\n') { cut = i; break; }
+		}
+		if(cut == 0) {
+			if(log_n < MQTT_UTK_LOG_CHUNK && ++log_age < MQTT_UTK_LOG_HOLD) return;
+			cut = log_n;
+		}
+		if(mqtt_publish(client, MQTT_TOPIC_LOG, log_pend, cut, 0 /* qos */,
+				0 /* retain */, publish_done_cb, NULL) != ERR_OK) {
+			return;				/* output buffer full: next poll */
+		}
+		for(i = cut; i < log_n; i++) log_pend[i - cut] = log_pend[i];
+		log_n = (u16_t)(log_n - cut);
+		log_age = 0;
+	}
+}
+
+static void outbox_timeout(void *arg)
+{
+	static uint32_t	last_seq;
+	static uint32_t	sent;
+	uint8_t		frame[TF_LEN];
+	uint32_t	s1, s2, i;
+
+	(void)arg;
+
+	s1 = telem_outbox_seq;
+	if(mqtt_client_is_connected(client) && (s1 & 1u) == 0 && s1 != last_seq) {
+		__asm__ volatile("dmb" ::: "memory");
+		for(i = 0; i < TF_LEN; i++) {
+			frame[i] = telem_outbox[i];
+		}
+		__asm__ volatile("dmb" ::: "memory");
+		s2 = telem_outbox_seq;
+		if(s1 == s2) {			/* not overwritten while copying */
+			if(mqtt_publish(client, MQTT_TOPIC_TELEM, frame, TF_LEN,
+					0 /* qos */, 0 /* retain */,
+					publish_done_cb, NULL) == ERR_OK) {
+				last_seq = s1;
+				if(sent++ == 0) {
+					tm_printf((UB*)"mqtt: telemetry on [" MQTT_TOPIC_TELEM
+						  "], %d-byte frames\n", (int)TF_LEN);
+				}
+			}
+		}
+		/* else: the writer was mid-copy; try again on the next poll */
+	}
+
+	/* event ring: publish what is waiting, oldest first; stop at the
+	   first refusal (output buffer full) and retry on the next poll */
+	while(mqtt_client_is_connected(client) && telem_evt_tail != telem_evt_head) {
+		uint32_t	t = telem_evt_tail;
+		uint8_t		ev[TELEM_EVT_LEN];
+		u16_t		n = 0;
+
+		__asm__ volatile("dmb" ::: "memory");
+		while(n < TELEM_EVT_LEN - 1U &&
+		      telem_evt[t % TELEM_EVT_SLOTS][n] != '\0') {
+			ev[n] = telem_evt[t % TELEM_EVT_SLOTS][n];
+			n++;
+		}
+		if(mqtt_publish(client, MQTT_TOPIC_EVENT, ev, n, 0, 0,
+				publish_done_cb, NULL) != ERR_OK) {
+			break;
+		}
+		telem_evt_tail = t + 1U;
+	}
+
+	log_poll();
+
+	sys_timeout(MQTT_UTK_OUTBOX_MS, outbox_timeout, NULL);
 }
 
 static void retry_timeout(void *arg)
@@ -165,6 +374,31 @@ static void connection_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_t 
 			tm_printf((UB*)"mqtt: mqtt_subscribe() failed, err=%d\n",
 				  (int)err);
 		}
+		err = mqtt_subscribe(client, MQTT_TOPIC_SNAPSHOT, 0 /* qos */,
+				     subscribe_done_cb, (void*)MQTT_TOPIC_SNAPSHOT);
+		if(err != ERR_OK) {
+			tm_printf((UB*)"mqtt: subscribe to " MQTT_TOPIC_SNAPSHOT
+				  " failed, err=%d\n", (int)err);
+		}
+		err = mqtt_subscribe(client, MQTT_TOPIC_MAP, 1 /* qos */,
+				     subscribe_done_cb, (void*)MQTT_TOPIC_MAP);
+		if(err != ERR_OK) {
+			tm_printf((UB*)"mqtt: subscribe to " MQTT_TOPIC_MAP
+				  " failed, err=%d\n", (int)err);
+		}
+		err = mqtt_subscribe(client, MQTT_TOPIC_CMD, 1 /* qos */,
+				     subscribe_done_cb, (void*)MQTT_TOPIC_CMD);
+		if(err != ERR_OK) {
+			tm_printf((UB*)"mqtt: subscribe to " MQTT_TOPIC_CMD
+				  " failed, err=%d\n", (int)err);
+		}
+
+		/* console copy on: from here on every console line also goes
+		   to MQTT_TOPIC_LOG */
+		log_n = 0;
+		log_age = 0;
+		tm_mqtt_log_enable(1);
+		tm_printf((UB*)"mqtt: console log on [" MQTT_TOPIC_LOG "]\n");
 
 		/* Drop any chain left over from a previous connection before
 		 * arming a new one. Each reconnect would otherwise add another
@@ -172,12 +406,18 @@ static void connection_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_t 
 		 * MEMP_SYS_TIMEOUT slot until the pool is exhausted. */
 		sys_untimeout(heartbeat_timeout, NULL);
 		sys_timeout(MQTT_UTK_HEARTBEAT_MS, heartbeat_timeout, NULL);
+		/* same rule for the telemetry poll chain (one slot of the +4
+		   MEMP_NUM_SYS_TIMEOUT budget in lwipopts.h) */
+		sys_untimeout(outbox_timeout, NULL);
+		sys_timeout(MQTT_UTK_OUTBOX_MS, outbox_timeout, NULL);
 	} else {
 		/* mqtt_client_connect() reconnects on its own for a dropped
 		 * keepalive; a rejected/never-established connection does not
 		 * retry itself, so do that here -- on a delay, so a broker
 		 * that keeps rejecting (e.g. bad client ID) can't turn this
 		 * into a tight reconnect loop. */
+		tm_mqtt_log_enable(0);		/* nobody to send it to */
+		log_n = 0;
 		tm_printf((UB*)"mqtt: connection status %d, retrying in %ds\n",
 			  (int)status, MQTT_UTK_RETRY_MS / 1000);
 		sys_timeout(MQTT_UTK_RETRY_MS, retry_timeout, NULL);

@@ -1,29 +1,41 @@
 /*
  *	subsystem5.c
- *	Subsystem 5 -- <name>.  EMPTY TEMPLATE.
- *
- *	subsystem5_init():  create this subsystem's kernel objects
- *	                    (semaphores, mailboxes, ...).  Do not start
- *	                    tasks here.
- *	subsystem5_start(): create and start this subsystem's tasks, e.g.
- *	    ID tid = app_start_task(my_task, S5_PRI_MAIN, 0, "my_task");
- *	    return (tid < E_OK) ? tid : E_OK;
- *
- *	Drivers for this subsystem's hardware go in this folder as
- *	drv_<name>.c / drv_<name>.h, called only from the task that owns
- *	the peripheral (TEAM.md section 3).
- *
- *	Record every pin, task, object and interface in TEAM.md.
+ *	Supervisor + Telemetry: hardware init and task start. Owner: Christian
  */
 
 #include "subsystem5.h"
+#include "drv_ui.h"
+
+EXPORT ID   tid_supervisor;
+EXPORT ID   tid_telemetry;
+EXPORT BOOL ui_led_ok;
 
 EXPORT ER subsystem5_init(void)
 {
-	return E_OK;
+	INT r;
+
+	/* WS2812 AFTER the encoders on pio1 (S1 ran first, R7) */
+	r = drv_led_init();
+	ui_led_ok = (r == UI_OK);
+	LOG("sup", "WS2812 PIO load: %s\n",
+	    r == UI_OK ? "OK" : (r == UI_ERR_NO_SPACE ? "NO SPACE" : "SM BUSY"));
+
+	if (drv_buzzer_init() != UI_OK) {
+		return E_SYS;
+	}
+	if (buttons_init() < E_OK) {
+		return E_SYS;
+	}
+	return ui_led_ok ? E_OK : E_SYS;
 }
 
 EXPORT ER subsystem5_start(void)
 {
-	return E_OK;
+	tid_supervisor = app_start_task(supervisor_task, PRI_SUPERVISOR,
+					CORE_SUPERVISOR, "supervisor");
+	if (tid_supervisor < E_OK) return tid_supervisor;
+	tid_telemetry = app_start_periodic(telemetry_task, PRI_TELEMETRY,
+					   CORE_TELEMETRY, PERIOD_TELEMETRY_MS,
+					   "telemetry", NULL);
+	return (tid_telemetry < E_OK) ? tid_telemetry : E_OK;
 }

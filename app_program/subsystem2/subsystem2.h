@@ -1,42 +1,57 @@
 /*
  *	subsystem2.h
- *	Subsystem 2 -- Producer (sample source).  Student ID: <student ID>.
+ *	Subsystem 2 -- Line Following, Barcode Decode, LineSearch.
+ *	Owner: Ryan (Track Purist).  Public interface only.  Plan section 7.
  *
- *	Public interface of subsystem 2.  Other subsystems include it as
- *	"../subsystem2/subsystem2.h".
+ *	Pin revision 2 (AO outputs only, DO unconnected):
+ *	  left line sensor  GP26 = ADC0   analog, threshold set by calibration
+ *	  right line sensor GP17          AO into a NON-ADC pin: digital only
+ *	  barcode sensor    GP27 = ADC1   analog
+ *
+ *	Outputs  line error word (5 ms), EV_LINE_LOST, EV_JUNCTION,
+ *	         EV_BARCODE, EV_LINE_SAMPLE (only in SYS_LINE_SEARCH),
+ *	         EV_CALIB_DONE (CAL_WHO_IR), LINE_SEARCH_FAIL bit
+ *	Inputs   ADC0, ADC1, GP17, nav_state odometer, sys_state_get(), flg_calib
  */
 
 #ifndef SUBSYSTEM2_H
 #define SUBSYSTEM2_H
 
 #include "../app.h"
+#include "line_search.h"
 
-#define S2_PRI_PRODUCER		14	/* priority band 14-15 (TEAM.md) */
-#define S2_PERIOD_MS		300	/* one sample every 300 ms */
+IMPORT ID tid_line;
+IMPORT ID tid_barcode;
 
-/* ---------------------------------------------------------------------
- *  IF-01 data format: one sample, sent to subsystem 3's mailbox.
- *  A mailbox message MUST start with a T_MSG header: the kernel links
- *  messages together through it, so the data itself is never copied.
- * --------------------------------------------------------------------- */
+/* GP17 level on black tape.  On most TCRT5000 modules AO rises on black
+   (less reflection), so black = 1.  TODO RY-1.3: check on the bench, and
+   check that white really reads 0 (AO must go below 0.8 V). */
+#define LINE_R_BLACK		1U
+
+/* IR thresholds for the two analog sensors, set by calibration (RY-1.4).
+   ADC above the threshold = black.  Placeholders until measured. */
 typedef struct {
-	T_MSG	hdr;		/* used by the kernel, do not touch */
-	UW	seq;		/* sample sequence number */
-	UW	time_ms;	/* system time when the sample was taken */
-	INT	value;		/* the "measurement", 0..100 */
-	INT	prc;		/* processor (core) that produced it: 1 or 2 */
-} SAMPLE_MSG;
+	UH	thr_l;		/* left line sensor, ADC0 */
+	UH	thr_bc;		/* barcode sensor, ADC1 */
+	UB	calibrated;
+} IR_CAL;
+IMPORT IR_CAL ir_cal;
 
-#define S2_POOL_COUNT	4	/* at most 4 samples in flight */
+/* Newest ADC reading of channel ADC_CH_LINE_L / ADC_CH_BARCODE, at most
+   1 ms old.  The barcode task is the only ADC reader (task_barcode.c). */
+IMPORT UW adc_latest(UINT ch);
 
-/* IF-02: the receiver of a sample gives its memory block back to
-   mpf_samples (tk_rel_mpf) and then a slot back to sem_slots
-   (tk_sig_sem, count 1).  Nothing else may use these two objects. */
-IMPORT ID	sem_slots;
-IMPORT ID	mpf_samples;
+/* Barcode counters (telemetry, tests) */
+typedef struct {
+	UW	reads;
+	UW	misreads;
+	UB	last_letter;		/* 0..25, BC_LETTER_INVALID = none */
+	UB	last_rev;
+} BC_STATS;
+IMPORT volatile BC_STATS bc_stats;
 
 /* Private to subsystem 2 */
-IMPORT void	producer_task(INT stacd, void *exinf);
-IMPORT INT	s2_make_value(UW seq);
+IMPORT void line_task(INT stacd, void *exinf);
+IMPORT void barcode_task(INT stacd, void *exinf);
 
 #endif /* SUBSYSTEM2_H */

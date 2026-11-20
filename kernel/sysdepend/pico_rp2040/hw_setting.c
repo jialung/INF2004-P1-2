@@ -187,6 +187,13 @@ EXPORT void knl_startup_hw(void)
 	/* Startup System Clock */
 	startup_clock(CLKATR_USB | CLKATR_ADC | CLKATR_RTC | CLKATR_PREI);
 
+	/* 1 us tick for the TIMER (time_us_64, timerawl, now_us): the
+	   watchdog tick generator divides clk_ref (= XOSC, 12 MHz) by CYCLES.
+	   The Pico SDK does this in clocks_init(); this port has its own
+	   startup_clock(), so without it the TIMER ran ~43x slow
+	   (12 MHz / 512).  RP2040 datasheet 4.7, WATCHDOG TICK register. */
+	out_w(0x40058000 + 0x2C, 0x200 | XOSC_MHz);	/* ENABLE | CYCLES */
+
 	for(INT i = 0; (rst = module_tbl[i]); i++) {
 		set_w(RESETS_RESET, rst);
 		clr_w(RESETS_RESET, rst);
