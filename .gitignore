@@ -22,5 +22,19 @@ config/wifi_secrets.h
 *.avi
 *.mkv
 
+# Windows builds of host tools and tests, and build logs
+*.exe
+build_make/build_log.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor settings (per PC)
+.vscode/
+
+# Old prebuilt images (build your own in build_make/)
+firmware/
+
 # macOS
 .DS_Store

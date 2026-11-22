@@ -43,7 +43,7 @@ exactly what the team changed. Patches P1 and P2 are already applied.
    UART0 on GP0/GP1, which are now the right encoder, so `app.h` refuses them.
    `WIFI=none` is refused too (the SDK include paths come with the radio).
 3. Flash: hold BOOTSEL, plug in, copy the `.uf2` to RPI-RP2. Serial monitor
-   at 115200. Prebuilt images are in `firmware/`.
+   at 115200.
 4. Host tests (any laptop C compiler, no Pico needed): `make -C tests/host -f host_tests.mk`.
 
 ---
