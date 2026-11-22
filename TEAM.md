@@ -1,8 +1,10 @@
 # Team and subsystems — INF2004 P1-2
 
 Single place that says **who owns what**. Generated from the shared
-skeleton (`docs/SKELETON.md`) and the Revised Task List v2. Fill in the
-student IDs and GitHub usernames, and keep this file up to date.
+skeleton (`docs/SKELETON.md`) and the Revised Task List v2. Keep this file
+up to date. Owners: add your GitHub username.
+
+Repo: [jialung/INF2004-P1-2](https://github.com/jialung/INF2004-P1-2)
 
 Rule: **only the owner edits a subsystem's folder.** Shared files in
 `app_program/` (no subfolder) change only by team agreement.
@@ -11,11 +13,11 @@ Rule: **only the owner edits a subsystem's folder.** Shared files in
 
 | # | Subsystem (what it does) | Owner | Student ID | GitHub | Code | Tests |
 |---|---|---|---|---|---|---|
-| 1 | Motion Control: motors, encoders, PID, odometry, x/y | Jia Lung | | | `app_program/subsystem1/` | `testing/subsystem1/` |
-| 2 | Line Following, Barcode Decode, LineSearch | Ryan | | | `app_program/subsystem2/` | `testing/subsystem2/` |
-| 3 | IMU: heading, tilt, humps, impact | Jian Yi | | | `app_program/subsystem3/` | `testing/subsystem3/` |
-| 4 | Obstacle Scan: ultrasonic + scan servo | Lui Khee | | | `app_program/subsystem4/` | `testing/subsystem4/` |
-| 5 | Supervisor, Telemetry, buttons, RGB LED, buzzer | Christian | | | `app_program/subsystem5/` | `testing/subsystem5/` |
+| 1 | Motion Control: motors, encoders, PID, odometry, x/y | Jia Lung | 2500025 | jialung | `app_program/subsystem1/` | `testing/subsystem1/` |
+| 2 | Line Following, Barcode Decode, LineSearch | Ryan | 2503473 | | `app_program/subsystem2/` | `testing/subsystem2/` |
+| 3 | IMU: heading, tilt, humps, impact | Jian Yi | 2501080 | | `app_program/subsystem3/` | `testing/subsystem3/` |
+| 4 | Obstacle Scan: ultrasonic + scan servo | Lui Khee | 2501142 | | `app_program/subsystem4/` | `testing/subsystem4/` |
+| 5 | Supervisor, Telemetry, buttons, RGB LED, buzzer | Christian | 2502365 | | `app_program/subsystem5/` | `testing/subsystem5/` |
 
 Shared modules (`app_program/`), owner in brackets:
 `rtos_config.h`, `hw_alloc.h`, `hal.h` / `hal_rp2040.c`, `nav_state`, `wcet`, `app_main.c` (Jia Lung);
@@ -53,8 +55,7 @@ Shared modules (`app_program/`), owner in brackets:
 |---|---|---|---|
 | PWM slices 4, 5 | S1 | motion | GP8–GP11 |
 | PIO1 SM0 (right encoder, offset 0) | S1 | motion | GP0 / GP1 |
-| ADC0 + ADC1 (sole owner: kernel ADC driver OFF, patch P2) | S2 | line, barcode (later: DMA ring) | GP26, GP27 |
-| DMA channel for the ADC ring, claimed | S2 | — | — |
+| ADC0 + ADC1 (sole owner: kernel ADC driver OFF, patch P2) | S2 | barcode task reads both every 1 ms (direct reads, no DMA) | GP26, GP27 |
 | I2C1 | S3 | imu | GP2 / GP3 |
 | PWM slice 7 | S4 | obstacle | GP15 |
 | PIO1 SM2 (WS2812) | S5 | supervisor | GP18 |
@@ -73,7 +74,7 @@ template's default bands.
 | Subsystem | Tasks (name – priority – core – period) |
 |---|---|
 | 1 | motion – 8 – core 1 – 10 ms cyclic |
-| 2 | line – 9 – core 1 – 5 ms cyclic; barcode – 11 – core 1 – 10 ms cyclic |
+| 2 | line – 9 – core 1 – 5 ms cyclic; barcode – 11 – core 1 – 1 ms cyclic |
 | 3 | imu – 12 – core 0 – 20 ms cyclic |
 | 4 | obstacle – 13 – core 0 – 50 ms + on request |
 | 5 | supervisor – 10 – core 1 – event-driven (10 ms poll); telemetry – 15 – core 0 – 500 ms cyclic |
