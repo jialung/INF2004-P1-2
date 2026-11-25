@@ -351,7 +351,7 @@ class Car:
         payload = raw.decode("utf-8", "replace")
         with self.lock:
             self.dirty = True
-            if topic in (mu.TOPIC_HB, mu.TOPIC_LOG, mu.TOPIC_EVENT, mu.TOPIC_TELEM):
+            if topic in TOPICS_IN:            # every one of them comes from the car
                 self.last_heard = time.time()
             if topic == mu.TOPIC_TELEM:
                 self.on_telem(raw)
@@ -659,7 +659,9 @@ class Car:
             if self.last_heard is None:
                 online = {"tone": "wait", "text": "Car: no contact yet"}
             elif now - self.last_heard > mu.OFFLINE_AFTER_S:
-                online = {"tone": "bad", "text": "Car offline (%d s)"
+                # Only the car -> PC direction is known to be quiet: commands
+                # may still reach the car (seen on a lossy Wi-Fi uplink).
+                online = {"tone": "bad", "text": "No data from car (%d s)"
                           % (now - self.last_heard)}
             else:
                 online = {"tone": "ok", "text": "Car online"}
@@ -668,8 +670,9 @@ class Car:
                 stale = int(now - self.telem_last)
             why = self.why_now()
             if stale is not None:
-                why["stale"] = ("No telemetry for %d s: the car is offline or Wi-Fi is "
-                                "down. This is the last known reason." % stale)
+                why["stale"] = ("No telemetry for %d s: the car is off, or its Wi-Fi "
+                                "uplink is stalled (commands may still reach it). "
+                                "This is the last known reason." % stale)
             avg = (self.run_dist_mm / self.run_time_s) if self.run_time_s > 0 else 0
             speed = {
                 "v": self.spd[0] if self.spd else None,

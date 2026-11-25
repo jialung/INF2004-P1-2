@@ -17,7 +17,8 @@ Topics (prefix = MQTT_CLIENT_ID in config/wifi_secrets.h):
   snapshot, snapshot/reply
   log          car -> PC   console text, whole lines
   event        car -> PC   JSON, used here for the state display
-  heartbeat    car -> PC   "hb N" every 5 s, used for online / offline
+  heartbeat    car -> PC   "hb N" every 5 s; any car -> PC topic counts as
+                           "heard from the car" in the panel
 """
 
 import os

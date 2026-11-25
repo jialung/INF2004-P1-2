@@ -46,6 +46,17 @@
 #define WIFI_AUTH_MODE       CYW43_AUTH_WPA2_MIXED_PSK
 #endif
 
+/* Radio power save, applied every time the link comes up. The driver default
+ * (CYW43_DEFAULT_PM = CYW43_PERFORMANCE_PM) sleeps the radio between beacons
+ * with a 200 ms idle timeout; on the car's busy uplink that showed as
+ * 12-40 % ping loss, RTTs up to ~400 ms and 20-60 s stalls of car -> broker
+ * traffic while commands still arrived. Keeping the radio awake costs a few
+ * tens of mA, small next to the motors. Build with
+ * -DWIFI_PM=CYW43_DEFAULT_PM to go back. */
+#ifndef WIFI_PM
+#define WIFI_PM              CYW43_NONE_PM
+#endif
+
 extern volatile uint32_t cyw43_utk_poll_requested;
 extern int32_t tk_dly_tsk(uint32_t delay);
 extern uint64_t time_us_64(void);
@@ -292,9 +303,14 @@ void cyw43_utk_task(int32_t stacd, void *exinf)
             prev_link_status = radio_status.link_status;
             if(radio_status.link_status == CYW43_LINK_UP) {
                 uint32_t ip = radio_status.ip_addr;
+                int      pm_err;
                 tm_printf((UB*)"wifi: link up, ip=%d.%d.%d.%d\n",
                           (int)(ip & 0xff), (int)((ip >> 8) & 0xff),
                           (int)((ip >> 16) & 0xff), (int)((ip >> 24) & 0xff));
+                /* still inside cyw43_thread_enter(), as the driver requires */
+                pm_err = cyw43_wifi_pm(&cyw43_state, WIFI_PM);
+                tm_printf((UB*)"wifi: power save 0x%x %s\n", (unsigned)WIFI_PM,
+                          (pm_err == 0)? "set": "NOT set");
             } else {
                 tm_printf((UB*)"wifi: link status -> %s (%d)\n",
                           link_status_str(radio_status.link_status),
