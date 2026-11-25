@@ -36,6 +36,14 @@ put its link in the *Log / evidence* column of that test's row in
 
 Newest at the bottom. Never delete a row.
 
-| Date | Subsystem | Test ID / demo | Commit | Student ID | Link | Notes |
-|---|---|---|---|---|---|---|
-| YYYY-MM-DD | S1 | S1-U03 | `abc1234` | | <https://youtu.be/...> | LED blinks at 2 Hz |
+| Date       | Subsystem | Test ID / demo                 | Commit  | Student ID | Link                           | Notes                                 |
+| ---------- | --------- | ------------------------------ | ------- | ---------- | ------------------------------ | ------------------------------------- |
+| 2026-11-25 | S1, S2    | S1-U06, INT-03                 | 67cb365 | -          | <https://youtu.be/qcS9_0VE9O8> | Wheel drive and steering on the track |
+| 2026-11-25 | S5        | S5-U05, S5-U08                 | 67cb365 | -          | <https://youtu.be/MFoleEEiH54> | Status LED colours and MODE hold      |
+| 2026-11-25 | S4        | S4-U10                         | 67cb365 | -          | <https://youtu.be/BUdd4fKt3JU> | Servo sweep                           |
+| 2026-11-25 | S2, S5    | S2-U09, INT-09                 | 67cb365 | -          | <https://youtu.be/4dCMt9Nr6f4> | Line lost and line search             |
+| 2026-11-25 | SYS       | INT-02, SYS-03, SYS-04, S5-U05 | 67cb365 | -          | <https://youtu.be/92C_4sAY2dE> | Junction moves: left, right, U-turn   |
+| 2026-11-25 | SYS       | SYS-09, SYS-07                 | 67cb365 | -          | <https://youtu.be/WCOPnbTaFRE> | Right obstacle bypass                 |
+| 2026-11-25 | SYS       | SYS-09, SYS-07                 | 67cb365 | -          | <https://youtu.be/VTZhVHhzdKM> | Left obstacle bypass                  |
+| 2026-11-25 | SYS       | SYS-16                         | 67cb365 | -          | <https://youtu.be/lAEoPwiIDgA> | Hotspot off while driving             |
+| 2026-11-25 | SYS       | SYS-17                         | 67cb365 | -          | <https://youtu.be/9aZXYI_PDPk> | Stop moving: Lifting the car          |
